@@ -100,15 +100,14 @@ pub fn descriptor(a: *App, i: usize) desc.Object {
 ```
 
 The GPU path maps this to emissive materials (HDR bloom amplifies the pulses);
-the software path draws equivalent additive halos.
+the software path draws equivalent additive halos. `"gluon → orange emissive,
+breathing"` and `"purine core → warm tint, breathing"` are written the same way.
 
 `render_gpu.zig` owns one zengine **device** (Vulkan + the baked sphere/tube
 meshes) and hands out **views** — a raster plus export images per window. The
 main window takes one with `--gpu`; the inspector popup always takes one, so
 its mini-scene is zengine-rendered even while the main window is on the
-software path, and a main-window resize rebuilds only its own view. `"gluon → orange emissive,
-breathing"` and `"purine core → warm tint, breathing"` are written the same
-way.
+software path, and a main-window resize rebuilds only its own view.
 
 ### Decks — the guided journey
 

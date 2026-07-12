@@ -100,6 +100,11 @@ pub fn build(b: *std.Build) void {
         zengine_mod.addAnonymousImport(s.import, .{ .root_source_file = spv });
     }
 
+    // Which domain package drives the presenter (src/demos/<demo>/domain.zig).
+    const demo = b.option([]const u8, "demo", "Demo/domain to build: lisi, molecule, polytope") orelse "lisi";
+    const build_opts = b.addOptions();
+    build_opts.addOption([]const u8, "demo", demo);
+
     const exe = b.addExecutable(.{
         .name = "e8-explorer",
         .use_llvm = true, // match zengine: 0.16 self-hosted backend miscompile in extern calls
@@ -110,6 +115,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "zengine", .module = zengine_mod },
                 .{ .name = "zrame", .module = zrame_dep.module("zrame") },
+                .{ .name = "build_options", .module = build_opts.createModule() },
             },
         }),
     });
@@ -123,7 +129,7 @@ pub fn build(b: *std.Build) void {
     // Tests: the root-system math is exact Lie theory — every invariant is checked.
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/e8.zig"),
+            .root_source_file = b.path("src/demos/lisi/e8.zig"),
             .target = target,
             .optimize = .Debug,
         }),

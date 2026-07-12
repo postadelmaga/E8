@@ -87,7 +87,10 @@ figure, and narrates it in the panel with precise citations:
 | 6 | 2407.02497 Tables 1–2 | spin(1,3) boost/spin weights: lattice e1e2 *is* the (ωT, ωS) plane |
 | 7 | 2407.02497 Fig 2 | the 192 fermion states, 8 disjoint 24-cells of the CPTt Group |
 
-Clicking a root mid-journey swaps the panel to **that particle's story** —
+Clicking a root opens the **inspector**: a separate frameless smoked-glass
+window with supplementary information and a live mini-scene of the particle's
+triality orbit, slowly turning. The side panel simultaneously swaps to **that
+particle's story** —
 which block it belongs to, what Lisi identifies it as, what is exact and what
 is interpretation, with citations into 0711.0770, 2407.02497, 1004.4866 and
 the Distler–Garibaldi critique 0905.2658 where it applies. `P` resumes the
@@ -102,8 +105,11 @@ drag        orbit · scroll zoom · click pick a root (click empty space to clea
             (in preset 6, ←/→ sweep the F4↔G2 angle and T animates the sweep)
 P           the paper journey: opens the side panel on a guided slide, then
             advances — each slide reproduces a figure of the papers AND
-            narrates it (citations included); click a root mid-journey for
-            that particle's own story, P resumes the tour
+            narrates it (citations included), with camera choreography and an
+            inline diagram; click a root mid-journey for that particle's own
+            story (and its inspector popup), P resumes the tour
+K           kiosk mode: the journey auto-advances (per-slide dwell)
+F5          hot-reload deck.zon from the working directory while authoring
 ← / →       rotate the view basis through the current 8D plane · Tab next plane
 T           8D tumble · Space 3D auto-spin · R reset view
 E           edges: all → triality partners → selection-only → none
@@ -111,38 +117,31 @@ C           colors: physics classes → generations (triality) → so(16) 120⊕
 F           filter: all → bosons → fermions → gen I/II/III → leptons → quarks → d4 blocks
 G           jump the selected root to its triality partner (gen I → II → III → I)
 X           export e8_roots.csv (coordinates, labels, weights, charges, triality)
-Esc         layered: closes the panel first, then the app
+Esc         layered by window focus: in the popup it closes the popup; in the
+            main window it closes the panel, then the app
 ```
 
 `X` writes the full system under the *current* projection — ready for
 numpy/pandas/Mathematica. The e8.zig module is dependency-free and usable on its
-own for scripted analysis.
+own for scripted analysis (now at `src/demos/lisi/e8.zig`).
 
-## Architecture: plugin-first
+## Architecture: a framework for interactive papers
 
-The core (`src/main.zig`) owns only the window, the orbit camera, the 8D→3D
-projection and the two rasterizers. Every feature is a self-contained plugin
-in `src/plugins/`, registered once in `src/app.zig` and reached through
-optional hooks dispatched at compile time (`inline for` + `@hasDecl` — zero
-indirection, no vtables):
+This repo is two things: a **domain-agnostic presenter framework** for
+interactive scientific papers on zengine/zrame, and its reference consumer —
+this reading of Lisi's E8 papers. The core (`src/main.zig`) owns only the
+window, camera, projection and rasterizers; features are plugins
+(`src/plugins/`), and the science lives in a domain package
+(`src/demos/<name>/`). Two more domains ship as proof:
 
-| hook | when |
-|---|---|
-| `init` | once, after the root system is built |
-| `key(code) bool` | evdev keycode, render thread; first plugin to claim it wins |
-| `frame` | every frame, before the 8D→3D projection |
-| `post` | every frame, after screen positions are valid (picking, HUD) |
-| `visual(i, *Visual)` | per root, chained in registry order — later overrides earlier |
-| `edgePairs` / `edgeVisual` | which lines to draw and how |
-| `status(buf)` | contribution to the HUD status line |
+```sh
+zig build -Ddemo=molecule run   # caffeine: ball-and-stick, purine-core tour
+zig build -Ddemo=polytope run   # the 24-cell: three 16-cells, isoclinic rotation
+```
 
-Current plugins: `projections` (presets 1-6, tumble, spin, reset), `colors`
-(C + legends), `filters` (F), `edges` (E: lattice/triality/selection),
-`selection` (picking, G, detail line), `effects` (xΦ wave, triality-fixed
-breathing, orbit lighthouse), `atlas` (A), `panel` (P), `exporter` (X).
-Adding a feature = one file in `src/plugins/` + one line in
-`app_mod.plugin_list`. Plugin state is plain data (`P.State`) — all hooks run
-on the render thread; cross-thread traffic stays in the core.
+See **[FRAMEWORK.md](FRAMEWORK.md)** for the hook contract, the object-descriptor
+API, the ZON deck format, and a tutorial for authoring your own interactive
+paper.
 
 ## Build & run
 

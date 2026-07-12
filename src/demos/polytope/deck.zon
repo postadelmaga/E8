@@ -1,0 +1,45 @@
+// Guided tour of the 24-cell. Edit and press F5 to hot-reload.
+.{
+    .slides = .{
+        .{
+            .title = "A polytope with no shadow in 3D",
+            .body = "The 24-cell: 24 vertices, 96 edges, 24 octahedral cells. Unlike the simplex, cube, orthoplex and the two icosahedral 4-polytopes, it has NO three-dimensional analogue — it exists only in four dimensions.\nThis projection is its Petrie plane: a regular 12-gon of vertices, the F4 Coxeter number.",
+            .cite = "Coxeter, Regular Polytopes, ch. VIII.",
+            .preset = "Petrie plane (12-gon)",
+            .color = "three 16-cells",
+            .edge = "all",
+            .cam = .{ 0.65, 0.35, 4.0 },
+            .fig = "petrie",
+        },
+        .{
+            .title = "Three 16-cells, one triality",
+            .body = "The 24 vertices split into three inscribed 16-cells: the axis octad (±1,0,0,0)… and the two half-integer octads (±½,±½,±½,±½), even and odd. F4's triality permutes the three — the same trick Lisi uses to bind three fermion generations to one 24-cell.\nThe antipode links pair each vertex with its opposite; press G on a selection to jump across.",
+            .cite = "Coxeter §8.2; Lisi arXiv:2407.02497 Fig 1.",
+            .preset = "front cell",
+            .color = "three 16-cells",
+            .edge = "antipode",
+            .cam = .{ 0.40, 0.30, 4.2 },
+        },
+        .{
+            .title = "The isoclinic rotation",
+            .body = "A rotation possible only in four dimensions: two orthogonal planes turning by the SAME angle at once. No axis is fixed — every vertex moves on a Clifford torus.\n←/→ sweeps the double angle by hand; T animates it. Watch the three 16-cells trade places.",
+            .cite = "Coxeter §12.1 (isoclinic rotations).",
+            .preset = "isoclinic rotation",
+            .color = "three 16-cells",
+            .edge = "all",
+            .tumble = true,
+            .cam = .{ 0.65, 0.25, 4.0 },
+            .dwell = 30,
+        },
+        .{
+            .title = "Self-dual",
+            .body = "The dual of a polytope swaps vertices with cells. The 24-cell's 24 octahedral cells have centers that form… another 24-cell: it is self-dual, alone among the 4-polytopes apart from the simplex.\nIt also tiles flat 4-space by translation, and as the D4 lattice gives the densest packing in four dimensions.",
+            .cite = "Coxeter §8.4; Conway & Sloane, SPLAG ch. 4 (D4).",
+            .preset = "front cell",
+            .color = "hidden depth",
+            .edge = "all",
+            .cam = .{ 1.0, 0.5, 3.8 },
+            .dwell = 26,
+        },
+    },
+}

@@ -1,50 +1,38 @@
-//! The application core seam: shared state (`App`), the per-root/per-edge
-//! visual contracts, and the comptime plugin registry.
+//! The presenter framework's core seam: shared state (`App`), the visual
+//! contracts, the domain interface types, and the comptime plugin registry.
 //!
-//! The explorer is plugin-first: every feature — projections, colors, filters,
-//! selection, effects, edge modes, the paper atlas, the particle panel, the
-//! CSV exporter — is a self-contained module in `src/plugins/`, listed once in
-//! `plugin_list`. The core (main.zig) owns only the window, the camera, the
-//! 8D→3D projection and the two rasterizers; everything else reaches the frame
-//! through optional hooks, dispatched statically (`inline for` + `@hasDecl`,
-//! zero indirection):
+//! The framework is domain-agnostic. A domain package (src/demos/<name>/,
+//! selected by `-Ddemo=`) supplies the points, their classifications and
+//! stories, the projections, the slide deck and the plugin list; the core
+//! (main.zig) owns only the window, the camera, the dim-D → 3D projection and
+//! the two rasterizers. Features reach the frame through optional hooks,
+//! dispatched statically (`inline for` + `@hasDecl`, zero indirection):
 //!
-//!   init(a)                  once, after the root system is built
+//!   init(a) / deinit(a)      once, around the app's life
 //!   key(a, code) bool        evdev keycode on the render thread; true = handled
-//!                            (first plugin to claim a key wins — registry order)
-//!   frame(a)                 per frame, BEFORE the 8D→3D projection
-//!   post(a)                  per frame, after p3/scr/vis are valid (picking, HUD)
-//!   visual(a, i, *Visual)    per root, chained in registry order — later
-//!                            plugins override earlier ones
-//!   edgePairs(a) []const [2]u16   which lines to draw (first plugin wins)
-//!   edgeVisual(a, i, j) ?EdgeVisual  style for one line; null skips it
-//!   status(a, buf) []const u8     contribution to the HUD status line
+//!   frame(a)                 per frame, BEFORE the projection
+//!   post(a)                  per frame, after screen positions are valid
+//!   visual(a, i, *Visual)    per point, chained in registry order
+//!   edgePairs(a) / edgeVisual(a, i, j)   which lines to draw and how
+//!   status(a, buf)           contribution to the HUD status line
 //!
-//! A new feature = one file in src/plugins/ + one line in `plugin_list`.
-//! Plugin state is plain data in `P.State` (no atomics — key/frame/post/visual
-//! all run on the render thread); cross-thread traffic stays in the core.
+//! A new feature = one file + one line in the domain's `plugins` tuple.
+//! Plugin state is plain data in `P.State` (hooks run on the render thread);
+//! cross-thread traffic stays here (camera atomics, key queue).
 
 const std = @import("std");
 const zrame = @import("zrame");
-const e8 = @import("e8.zig");
+const geom = @import("geom.zig");
 const hud_mod = @import("hud.zig");
+const domain = @import("domain.zig");
+const descriptor = @import("descriptor.zig");
 
-// --- the plugin registry ---------------------------------------------------------------
-// Order matters twice: key dispatch stops at the first handler, and the visual
-// chain applies in order (selection overrides filters, effects override both).
+/// The active domain package (see src/domain.zig).
+pub const D = domain.D;
+pub const n = domain.n;
+pub const dim = domain.dim;
 
-pub const plugin_list = .{
-    @import("plugins/projections.zig"),
-    @import("plugins/colors.zig"),
-    @import("plugins/filters.zig"),
-    @import("plugins/edges.zig"),
-    @import("plugins/selection.zig"),
-    @import("plugins/effects.zig"),
-    @import("plugins/slides.zig"),
-    @import("plugins/panel.zig"),
-    @import("plugins/inspector.zig"),
-    @import("plugins/exporter.zig"),
-};
+pub const plugin_list = D.plugins;
 
 /// One field per plugin, named by its `id`, typed by its `State` (or void).
 pub const PluginStates = blk: {
@@ -61,34 +49,71 @@ pub const PluginStates = blk: {
     break :blk @Struct(.auto, null, &names, &types, &attrs);
 };
 
-/// A plugin's own state: `const st = app.state(@This());` from inside a hook.
 pub fn StateOf(comptime P: type) type {
     return if (@hasDecl(P, "State")) P.State else void;
 }
 
+// --- the domain interface types ----------------------------------------------------------
+// A domain exports (see demos/lisi/domain.zig for the reference):
+//   name/title/app_id: []const u8 · dim/n: comptime ints · Point (with .v)
+//   radius2: f32 — max |v|² (hidden-depth normalization)
+//   generate() [n]Point · buildEdges(gpa, points) ![]const [2]u16
+//   presets: []const PresetDef · color_modes: []const ColorModeDef
+//   filters: []const FilterDef · relations: []const RelationDef
+//   actions: []const ActionDef · plugins: tuple of plugin modules
+//   descriptor(a, i) descriptor.Object — how a point looks/behaves
+//   describe(a, i, buf) []const u8 — one-line HUD detail
+//   story(a) void — fill the side panel for the selection (or overview)
+//   inspect(a, i, tbuf, bbuf) struct{...} — popup text
+//   figure(a, id, dots) usize — inline panel diagram
+//   exportCsv(a) !void
+//   deck_path: []const u8 · deck_default: [:0]const u8
+
+pub const PresetDef = struct {
+    name: []const u8,
+    /// Basis for this preset; `theta` sweeps animated presets, ignored else.
+    basis: *const fn (theta: f32) geom.Basis,
+    animated: bool = false,
+};
+
+pub const ColorModeDef = struct {
+    name: []const u8,
+    color: *const fn (p: *const D.Point, hidden_t: f32) [3]f32,
+    legend: []const hud_mod.Hud.LegendIn,
+};
+
+pub const FilterDef = struct {
+    name: []const u8,
+    pass: *const fn (p: *const D.Point) bool,
+};
+
+/// A partner map over the points (triality, chain succession, duality…): the
+/// framework tabulates it, draws it as an edge mode, walks it as an orbit.
+pub const RelationDef = struct {
+    name: []const u8,
+    partner: *const fn (points: []const D.Point, i: u16) u16,
+};
+
+pub const ActionDef = struct {
+    key: u32,
+    help: []const u8,
+    run: *const fn (a: *App) void,
+};
+
 // --- window geometry ---------------------------------------------------------------------
 
-/// GPU frame size; the CPU path follows the live window instead.
 pub const frame_w: u32 = 1152;
 pub const frame_h: u32 = 648;
-/// Base window size: the frame plus glass bands for the HUD.
 pub const win_w: u32 = frame_w + 48;
 pub const win_h: u32 = frame_h + 120;
 
 // --- visual contracts --------------------------------------------------------------------
 
-/// How one root is drawn this frame. Both rasterizers consume the same struct:
-/// the GPU maps `glow` to emissive (bloom amplifies it), the CPU maps `bright`
-/// to disc shading and draws `halo`/`ring` as additive overlays.
 pub const Visual = struct {
     color: [3]f32 = .{ 1, 1, 1 },
-    /// Filter verdict — false renders dimmed and mutes effects.
     pass: bool = true,
-    /// GPU emissive multiplier.
     glow: f32 = 0.85,
-    /// CPU disc brightness multiplier.
     bright: f32 = 1.0,
-    /// Multiplier on the base point radius.
     radius: f32 = 1.0,
     halo: ?Halo = null,
     ring: ?[3]f32 = null,
@@ -96,14 +121,10 @@ pub const Visual = struct {
 
 pub const Halo = struct {
     rgb: [3]f32,
-    /// Screen radius = disc radius × this (+ a few px).
     radius_mul: f32,
-    /// Additive intensity, 0..255 scale.
     k: f32,
 };
 
-/// How one edge line is drawn. `glow` feeds the GPU tube emissive, `k` the CPU
-/// additive intensity, `width` scales the GPU tube radius.
 pub const EdgeVisual = struct {
     color: [3]f32,
     glow: f32 = 0.16,
@@ -111,10 +132,8 @@ pub const EdgeVisual = struct {
     width: f32 = 1.0,
 };
 
-// --- cross-thread input (window thread → render thread) ---------------------------------
+// --- cross-thread input ------------------------------------------------------------------
 
-/// Camera orbit state, written by the window thread's mouse handlers and read
-/// by the core each frame. Plugins may write it too (spin, reset).
 pub var cam_yaw: std.atomic.Value(u32) = .init(@bitCast(@as(f32, 0.65)));
 pub var cam_pitch: std.atomic.Value(u32) = .init(@bitCast(@as(f32, 0.35)));
 pub var cam_dist: std.atomic.Value(u32) = .init(@bitCast(@as(f32, 4.2)));
@@ -126,16 +145,13 @@ pub fn storeF32(a: *std.atomic.Value(u32), v: f32) void {
     a.store(@bitCast(v), .monotonic);
 }
 
-/// SPSC key queue: the window thread pushes evdev codes, the render thread
-/// drains them into `dispatchKey` — so plugin key handlers run on the render
-/// thread and plugin state needs no atomics.
 var key_ring: [32]u32 = undefined;
 var key_head: std.atomic.Value(u32) = .init(0);
 var key_tail: std.atomic.Value(u32) = .init(0);
 
 pub fn pushKey(code: u32) void {
     const h = key_head.load(.monotonic);
-    if (h -% key_tail.load(.acquire) >= key_ring.len) return; // full: drop
+    if (h -% key_tail.load(.acquire) >= key_ring.len) return;
     key_ring[h % key_ring.len] = code;
     key_head.store(h +% 1, .release);
 }
@@ -156,43 +172,82 @@ pub const App = struct {
     win: *zrame.Window,
     hud: *hud_mod.Hud,
 
-    // The root system (immutable after startup).
-    roots: [e8.n_roots]e8.Root,
+    // The point system (immutable after startup).
+    points: [n]D.Point,
     edges: []const [2]u16,
-    neighbors: [e8.n_roots][56]u16,
-    triality: [e8.n_roots]u16,
+    /// CSR adjacency over `edges` (degrees vary by domain).
+    nbr_off: [n + 1]u32 = undefined,
+    nbr: []u16 = &.{},
+    /// Tabulated relation partner maps, one per D.relations entry.
+    rel: [][]u16 = &.{},
 
     // View.
-    basis: e8.Basis,
-    preset: u32 = 1,
-    /// Set by a plugin (R); the core resets the orbit camera and clears it.
+    basis: geom.Basis,
+    preset: u32 = 0,
     reset_camera: bool = false,
 
-    // Per-frame data, core-written before `post`/draw.
+    // Per-frame data.
     dt: f32 = 0,
     anim: f32 = 0,
-    p3: [e8.n_roots][3]f32 = undefined,
-    hidden: [e8.n_roots]f32 = undefined,
-    /// Screen x, y + view depth; only valid where `vis` is true.
-    scr: [e8.n_roots][3]f32 = undefined,
-    vis: [e8.n_roots]bool = undefined,
-    /// Resolved visual per root (core fills via `rootVisual` before drawing).
-    visuals: [e8.n_roots]Visual = undefined,
+    p3: [n][3]f32 = undefined,
+    hidden: [n]f32 = undefined,
+    scr: [n][3]f32 = undefined,
+    vis: [n]bool = undefined,
+    visuals: [n]Visual = undefined,
 
     // Interaction.
     selected: i32 = -1,
-    /// Pending click in frame-local pixels (core sets, selection consumes).
     pick: ?[2]f32 = null,
-    /// Horizontal glass to reserve beside the frame (panel plugin).
     reserve_w: u32 = 0,
     status_dirty: bool = true,
     info_dirty: bool = true,
 
     state: PluginStates = .{},
 
-    /// A plugin's own state slot.
     pub fn pluginState(a: *App, comptime P: type) *StateOf(P) {
         return &@field(a.state, P.id);
+    }
+
+    /// Lattice neighbors of point `i` (from the domain's edge list).
+    pub fn neighbors(a: *const App, i: usize) []const u16 {
+        return a.nbr[a.nbr_off[i]..a.nbr_off[i + 1]];
+    }
+
+    /// The point's descriptor (delegates to the domain).
+    pub fn objectOf(a: *App, i: usize) descriptor.Object {
+        return D.descriptor(a, i);
+    }
+
+    /// Build adjacency and relation tables — call once after `edges` is set.
+    pub fn initTables(a: *App) !void {
+        var deg = try a.gpa.alloc(u32, n);
+        defer a.gpa.free(deg);
+        @memset(deg, 0);
+        for (a.edges) |e| {
+            deg[e[0]] += 1;
+            deg[e[1]] += 1;
+        }
+        a.nbr_off[0] = 0;
+        for (0..n) |i| a.nbr_off[i + 1] = a.nbr_off[i] + deg[i];
+        a.nbr = try a.gpa.alloc(u16, a.nbr_off[n]);
+        @memset(deg, 0);
+        for (a.edges) |e| {
+            a.nbr[a.nbr_off[e[0]] + deg[e[0]]] = e[1];
+            a.nbr[a.nbr_off[e[1]] + deg[e[1]]] = e[0];
+            deg[e[0]] += 1;
+            deg[e[1]] += 1;
+        }
+        a.rel = try a.gpa.alloc([]u16, D.relations.len);
+        for (D.relations, 0..) |rd, r| {
+            a.rel[r] = try a.gpa.alloc(u16, n);
+            for (0..n) |i| a.rel[r][i] = rd.partner(&a.points, @intCast(i));
+        }
+    }
+
+    pub fn deinitTables(a: *App) void {
+        for (a.rel) |t| a.gpa.free(t);
+        a.gpa.free(a.rel);
+        a.gpa.free(a.nbr);
     }
 };
 
@@ -239,7 +294,6 @@ pub fn rootVisual(a: *App, i: usize) Visual {
     return v;
 }
 
-/// The line set to draw this frame — first plugin that owns edges wins.
 pub fn edgePairs(a: *App) []const [2]u16 {
     inline for (plugin_list) |P| {
         if (comptime @hasDecl(P, "edgePairs")) return P.edgePairs(a);
@@ -247,7 +301,6 @@ pub fn edgePairs(a: *App) []const [2]u16 {
     return &.{};
 }
 
-/// Style for one line; null skips it (e.g. selection-only mode).
 pub fn edgeVisual(a: *App, ai: u16, bi: u16) ?EdgeVisual {
     inline for (plugin_list) |P| {
         if (comptime @hasDecl(P, "edgeVisual")) return P.edgeVisual(a, ai, bi);
@@ -255,7 +308,6 @@ pub fn edgeVisual(a: *App, ai: u16, bi: u16) ?EdgeVisual {
     return null;
 }
 
-/// Assemble the HUD status line from every plugin's contribution.
 pub fn buildStatus(a: *App, buf: []u8) []const u8 {
     const sep = " · ";
     var len: usize = 0;

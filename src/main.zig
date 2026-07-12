@@ -1,29 +1,25 @@
-//! E8 Explorer — an interactive research tool for the E8 root system in the
-//! spirit of Garrett Lisi's "An Exceptionally Simple Theory of Everything"
-//! (arXiv:0711.0770) and "C, P, T, and Triality" (arXiv:2407.02497).
-//!
-//! This file is only the CORE: window + input plumbing, the orbit camera, the
-//! 8D→3D projection, and the two rasterizers (zengine GPU mesh raster with
-//! bloom, multithreaded additive software fallback). Every feature — presets,
-//! colors, filters, selection, effects, edge modes, the paper atlas, the
-//! particle panel, CSV export — is a plugin in src/plugins/, registered in
-//! src/app.zig and reached through statically dispatched hooks. Keybindings
-//! live in their plugins; run the app to see the cheat sheet.
+//! Presenter framework core — window + input plumbing, the orbit camera, the
+//! dim-D → 3D projection, and the two rasterizers (zengine GPU mesh raster
+//! with bloom, multithreaded additive software fallback). Everything else is
+//! a plugin supplied by the active domain package (src/demos/<demo>/,
+//! selected with -Ddemo=; the Lisi E8 interactive paper is the default and
+//! reference domain). See src/app.zig for the hook contract.
 
 const std = @import("std");
 const ze = @import("zengine");
 const zrame = @import("zrame");
-const e8 = @import("e8.zig");
+const geom = @import("geom.zig");
 const hud_mod = @import("hud.zig");
 const render_cpu = @import("render_cpu.zig");
 const render_gpu = @import("render_gpu.zig");
 const app_mod = @import("app.zig");
 const App = app_mod.App;
+const D = app_mod.D;
+const n_pts = app_mod.n;
 
 const gpu_w = app_mod.frame_w;
 const gpu_h = app_mod.frame_h;
 const fovy = std.math.degreesToRadians(45.0);
-const max_instances: u32 = e8.n_roots + e8.n_edges + 16;
 const point_radius: f32 = 0.045;
 const tube_radius: f32 = 0.009;
 
@@ -180,39 +176,28 @@ pub fn main(init: std.process.Init.Minimal) !void {
         }
     }
 
-    // --- the root system ---------------------------------------------------------
-    const roots = e8.generate();
-    const edges = try e8.buildEdges(gpa, &roots);
+    // --- the point system (domain-supplied) -----------------------------------------
+    const points = D.generate();
+    const edges = try D.buildEdges(gpa, &points);
     defer gpa.free(edges);
-    // Per-root neighbor lists (56 each) for the selection halo.
-    var neighbors: [e8.n_roots][56]u16 = undefined;
-    {
-        var deg = [_]u8{0} ** e8.n_roots;
-        for (edges) |e| {
-            neighbors[e[0]][deg[e[0]]] = e[1];
-            neighbors[e[1]][deg[e[1]]] = e[0];
-            deg[e[0]] += 1;
-            deg[e[1]] += 1;
-        }
-    }
+    const max_instances: u32 = @intCast(n_pts + edges.len + 16);
 
     std.debug.print(
-        \\E8 Explorer — 240 roots, 6720 edges (Lisi Table 9 labeling + triality)
-        \\  drag orbit · scroll zoom · click pick · 1/2/3 Coxeter|physics|lattice
-        \\  4/5/6 G2 plane | F4 plane | F4<->G2 rotation
-        \\  P paper journey: opens the panel, then advances the guided slides
-        \\    (click a root mid-journey for its own story) · G triality partner
-        \\  ←/→ rotate 8D plane (Tab cycles; sweeps F4<->G2 in preset 6) · T tumble
-        \\  Space spin · E edges (all|triality|selection|off) · C colors · F filter
-        \\  R reset · X export CSV · Esc closes panel first, then the app
+        \\{s} — {d} points, {d} edges (presenter framework)
+        \\  drag orbit · scroll zoom · click pick (opens the inspector popup)
+        \\  1..{d} projection presets · P paper journey · K kiosk · F5 reload deck
+        \\  ←/→ rotate hidden plane (Tab cycles) · T tumble · Space spin
+        \\  E edges · C colors · F filter · R reset · X export
+        \\  Esc closes the focused layer first (popup, panel), then the app
         \\
-    , .{});
+    , .{ D.name, n_pts, edges.len, D.presets.len });
+    inline for (D.actions) |act| std.debug.print("  {s}\n", .{act.help});
 
     // --- window --------------------------------------------------------------------
     var hud: hud_mod.Hud = .{};
     const win = try zrame.Window.init(gpa, .{
-        .title = "E8 explorer — Lisi atlas (1..6 presets, A paper tour, P panel)",
-        .app_id = "dev.e8.explorer",
+        .title = D.title,
+        .app_id = D.app_id,
         .width = app_mod.win_w,
         .height = app_mod.win_h,
         // Esc is layered: the slides plugin closes the panel first, the app last.
@@ -233,12 +218,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
         .io = io,
         .win = win,
         .hud = &hud,
-        .roots = roots,
+        .points = points,
         .edges = edges,
-        .neighbors = neighbors,
-        .triality = e8.buildTriality(&roots),
-        .basis = e8.coxeterBasis(),
+        .basis = D.presets[0].basis(0),
     };
+    try app.initTables();
+    defer app.deinitTables();
     app_mod.dispatchInit(&app);
 
     // --- renderers -------------------------------------------------------------------
@@ -254,14 +239,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
     defer cpu.deinit();
     var instances: []ze.gpu_mesh.Instance = try gpa.alloc(ze.gpu_mesh.Instance, max_instances);
     defer gpa.free(instances);
-    const edge_jobs = try gpa.alloc(render_cpu.Edge, e8.n_edges + 56);
+    const edge_jobs = try gpa.alloc(render_cpu.Edge, edges.len + 64);
     defer gpa.free(edge_jobs);
     const workers = @max(std.Thread.getCpuCount() catch 4, 2);
     const threads = try gpa.alloc(std.Thread, workers - 1);
     defer gpa.free(threads);
     std.debug.print("render path: {s}\n", .{if (gpu3d != null) "GPU (zengine mesh raster + bloom, dmabuf)" else "CPU (software)"});
 
-    var order: [e8.n_roots]u16 = undefined; // CPU painter's order
+    var order: [n_pts]u16 = undefined; // CPU painter's order
     // GPU resize debounce: rebuild the raster once the size settles.
     var gpu_want_w: u32 = gpu_w;
     var gpu_want_h: u32 = gpu_h;
@@ -300,14 +285,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
             app_mod.storeF32(&app_mod.cam_pitch, 0.35);
             app_mod.storeF32(&app_mod.cam_dist, 4.2);
         }
-        e8.orthonormalize(&app.basis);
+        geom.orthonormalize(&app.basis);
 
-        // --- project 8D → 3D ---------------------------------------------------------
-        for (&app.roots, 0..) |*r, i| {
-            const p = e8.project(&app.basis, r.v);
+        // --- project dim-D → 3D ------------------------------------------------------
+        for (&app.points, 0..) |*r, i| {
+            const p = geom.project(&app.basis, r.v);
             app.p3[i] = p;
             const vis2 = dot3(p, p);
-            app.hidden[i] = @sqrt(std.math.clamp(2.0 - vis2, 0.0, 2.0)) / @sqrt(2.0);
+            app.hidden[i] = @sqrt(std.math.clamp(D.radius2 - vis2, 0.0, D.radius2)) / @sqrt(D.radius2);
         }
 
         // --- camera --------------------------------------------------------------------
@@ -383,14 +368,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
         app.info_dirty = false;
 
         // --- resolve visuals -------------------------------------------------------------
-        for (0..e8.n_roots) |i| app.visuals[i] = app_mod.rootVisual(&app, i);
+        for (0..n_pts) |i| app.visuals[i] = app_mod.rootVisual(&app, i);
         const pairs = app_mod.edgePairs(&app);
 
         // --- draw ---------------------------------------------------------------------------
         if (gpu3d) |g| {
             var count: usize = 0;
             const terr = 2.0 * dist * std.math.tan(fovy * 0.5) / @as(f32, @floatFromInt(rh)) * 1.5;
-            for (0..e8.n_roots) |i| {
+            for (0..n_pts) |i| {
                 const v = &app.visuals[i];
                 const rad = point_radius * v.radius;
                 instances[count] = .{
@@ -514,9 +499,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
             }
             cpu.drawEdges(edge_jobs[0..n_jobs], threads);
             // Points back-to-front.
-            for (0..e8.n_roots) |i| order[i] = @intCast(i);
+            for (0..n_pts) |i| order[i] = @intCast(i);
             const S = struct {
-                fn farFirst(zz: *const [e8.n_roots][3]f32, lhs: u16, rhs: u16) bool {
+                fn farFirst(zz: *const [n_pts][3]f32, lhs: u16, rhs: u16) bool {
                     return zz[lhs][2] > zz[rhs][2];
                 }
             };

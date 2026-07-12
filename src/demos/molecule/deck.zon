@@ -1,0 +1,47 @@
+// Guided tour of caffeine. Edit and press F5 to hot-reload.
+.{
+    .slides = .{
+        .{
+            .title = "Caffeine — a purine alkaloid",
+            .body = "Fourteen heavy atoms: eight carbons, four nitrogens, two oxygens (hydrogens omitted). The fused six- and five-membered rings make a purine — the same scaffold as the bases of DNA.\nBonds are drawn wherever two heavy atoms sit closer than 1.8 Å; nothing else is assumed.",
+            .cite = "Geometry: PubChem CID 2519 3D conformer.",
+            .preset = "molecular plane",
+            .color = "CPK elements",
+            .edge = "all",
+            .cam = .{ 0.2, 0.15, 4.6 },
+            .fig = "skeleton",
+        },
+        .{
+            .title = "The pharmacophore",
+            .body = "The rigid, planar purine core (highlighted, breathing) is the business end: it mimics adenosine closely enough to occupy its receptors without activating them.\nAdenosine accumulates through the day and makes you sleepy; caffeine blocks the message. That is the entire trick.",
+            .cite = "Fredholm et al., Pharmacol. Rev. 51 (1999) 83.",
+            .preset = "turntable",
+            .color = "purine core",
+            .edge = "all",
+            .tumble = true,
+            .cam = .{ 0.55, 0.35, 4.4 },
+            .dwell = 26,
+        },
+        .{
+            .title = "Nitrogens and carbonyls",
+            .body = "The four nitrogens make it a purine; three of them carry methyl groups. Which ones are methylated is the whole difference between caffeine (coffee), theobromine (cocoa) and theophylline (tea).\nThe two carbonyl oxygens at C2 and C6 are hydrogen-bond acceptors — the molecule's grip on its target.",
+            .cite = "Standard purine numbering; PubChem CID 2519.",
+            .preset = "molecular plane",
+            .color = "CPK elements",
+            .edge = "all",
+            .filter = "nitrogen",
+            .cam = .{ 0.1, 0.9, 4.2 },
+        },
+        .{
+            .title = "Walk the skeleton",
+            .body = "Click any atom and press G to step along the bonded skeleton, or use the inspector popup that opens with the selection.\nThis whole presentation is the SAME framework that drives the E8/Lisi interactive paper — only the domain package changed: points, classifications, presets, deck.",
+            .cite = "src/demos/molecule/ · see the framework docs.",
+            .preset = "turntable",
+            .color = "CPK elements",
+            .edge = "backbone",
+            .tumble = true,
+            .cam = .{ 0.9, 0.25, 4.8 },
+            .dwell = 24,
+        },
+    },
+}

@@ -10,38 +10,76 @@
 const std = @import("std");
 const ze = @import("zengine");
 
+/// A second raster + export images on the SAME Vulkan device, reusing the
+/// baked sphere/tube meshes — how the inspector popup gets a zengine scene of
+/// its own (emissive spheres, edge tubes, HDR bloom) without a second device.
+pub const View = struct {
+    owner: *Gpu3d,
+    raster: ze.gpu_mesh.MeshRaster,
+    imgs: [2]ze.gpu.Gpu.ExportImage,
+    w: u32,
+    h: u32,
+
+    pub fn destroy(self: *View) void {
+        for (&self.imgs) |*im| self.owner.gpu.destroyExportImage(im);
+        self.raster.deinit();
+        const gpa = self.owner.gpa;
+        gpa.destroy(self);
+    }
+};
+
+/// The zengine device plus the baked sphere/tube meshes. Windows don't render
+/// from it directly — each asks for a `View` (its own raster + export images),
+/// so the main window can resize without disturbing the inspector popup.
 pub const Gpu3d = struct {
     gpa: std.mem.Allocator,
     gpu: ze.gpu.Gpu,
-    raster: ze.gpu_mesh.MeshRaster,
-    imgs: [2]ze.gpu.Gpu.ExportImage,
     pages: [][]const u8,
     refs: []ze.gpu_mesh.ClusterRef,
     /// [start, end) slices of `refs` for each of the two meshes.
     sphere_range: [2]u32,
     tube_range: [2]u32,
     total_pages: u32,
-    w: u32,
-    h: u32,
+    /// The archive pages, kept resident so every view can upload them.
+    page_bytes: [][]u8,
 
+    /// Destroy every `View` first.
     pub fn destroy(self: *Gpu3d) void {
         const gpa = self.gpa;
-        for (&self.imgs) |*im| self.gpu.destroyExportImage(im);
-        self.raster.deinit();
         self.gpu.deinit();
+        for (self.page_bytes) |b| gpa.free(b);
+        gpa.free(self.page_bytes);
         gpa.free(self.pages);
         gpa.free(self.refs);
         gpa.destroy(self);
     }
 
-    /// Heap-allocated because `MeshRaster` keeps a pointer to the `Gpu` — the
-    /// struct must never move once the raster is initialized.
-    pub fn create(gpa: std.mem.Allocator, io: std.Io, w: u32, h: u32, max_instances: u32) !*Gpu3d {
+    /// An additional render target on this device (the popup's mini-scene).
+    /// Destroy it BEFORE the owner.
+    pub fn createView(self: *Gpu3d, w: u32, h: u32, max_instances: u32, bloom: f32) !*View {
+        const v = try self.gpa.create(View);
+        errdefer self.gpa.destroy(v);
+        v.owner = self;
+        v.w = w;
+        v.h = h;
+        v.raster = try ze.gpu_mesh.MeshRaster.init(&self.gpu, self.gpa, self.pages, self.refs, max_instances, w, h);
+        errdefer v.raster.deinit();
+        for (self.page_bytes, 0..) |bytes, p| v.raster.uploadPage(@intCast(p), bytes);
+        v.imgs[0] = try self.gpu.createExportImage(w, h, ze.gpu.vk.image_usage_color_attachment);
+        errdefer self.gpu.destroyExportImage(&v.imgs[0]);
+        v.imgs[1] = try self.gpu.createExportImage(w, h, ze.gpu.vk.image_usage_color_attachment);
+        v.raster.enableBloom(.{ .intensity = bloom }) catch |e| {
+            std.debug.print("bloom unavailable ({s}) — flat tonemap\n", .{@errorName(e)});
+        };
+        return v;
+    }
+
+    /// Heap-allocated because every `MeshRaster` keeps a pointer to the `Gpu`
+    /// — the struct must never move once a view exists.
+    pub fn create(gpa: std.mem.Allocator, io: std.Io) !*Gpu3d {
         const self = try gpa.create(Gpu3d);
         errdefer gpa.destroy(self);
         self.gpa = gpa;
-        self.w = w;
-        self.h = h;
 
         self.gpu = try ze.gpu.Gpu.init();
         errdefer self.gpu.deinit();
@@ -134,20 +172,10 @@ pub const Gpu3d = struct {
         self.refs = try refs.toOwnedSlice(gpa);
         errdefer gpa.free(self.refs);
 
-        self.raster = try ze.gpu_mesh.MeshRaster.init(&self.gpu, gpa, self.pages, self.refs, max_instances, w, h);
-        errdefer self.raster.deinit();
-        for (0..self.total_pages) |p| {
-            const bytes = try archive.readPageAlloc(gpa, @intCast(p));
-            defer gpa.free(bytes);
-            self.raster.uploadPage(@intCast(p), bytes);
-        }
-
-        self.imgs[0] = try self.gpu.createExportImage(w, h, ze.gpu.vk.image_usage_color_attachment);
-        errdefer self.gpu.destroyExportImage(&self.imgs[0]);
-        self.imgs[1] = try self.gpu.createExportImage(w, h, ze.gpu.vk.image_usage_color_attachment);
-        self.raster.enableBloom(.{ .intensity = 0.45 }) catch |e| {
-            std.debug.print("bloom unavailable ({s}) — flat tonemap\n", .{@errorName(e)});
-        };
+        // Page bytes stay resident: every view uploads them into its raster.
+        self.page_bytes = try gpa.alloc([]u8, self.total_pages);
+        errdefer gpa.free(self.page_bytes);
+        for (0..self.total_pages) |p| self.page_bytes[p] = try archive.readPageAlloc(gpa, @intCast(p));
         return self;
     }
 

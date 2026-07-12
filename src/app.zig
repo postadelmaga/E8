@@ -26,6 +26,7 @@ const geom = @import("geom.zig");
 const hud_mod = @import("hud.zig");
 const domain = @import("domain.zig");
 const descriptor = @import("descriptor.zig");
+const render_gpu = @import("render_gpu.zig");
 
 /// The active domain package (see src/domain.zig).
 pub const D = domain.D;
@@ -171,6 +172,10 @@ pub const App = struct {
     io: std.Io,
     win: *zrame.Window,
     hud: *hud_mod.Hud,
+    /// The zengine device, when one could be created. The main view uses it
+    /// only with `--gpu`; plugins (the inspector's mini-scene) can always ask
+    /// it for an extra `View`. Null when Vulkan/dmabuf is unavailable.
+    gpu: ?*render_gpu.Gpu3d = null,
 
     // The point system (immutable after startup).
     points: [n]D.Point,

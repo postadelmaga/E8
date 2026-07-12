@@ -224,17 +224,26 @@ pub fn main(init: std.process.Init.Minimal) !void {
     };
     try app.initTables();
     defer app.deinitTables();
-    app_mod.dispatchInit(&app);
 
     // --- renderers -------------------------------------------------------------------
-    var gpu3d: ?*render_gpu.Gpu3d = null;
+    // The zengine device is created whenever Vulkan/dmabuf allows it, even when
+    // the main window renders in software: plugins (the inspector's mini-scene)
+    // ask it for their own `View`.
+    var gpu3d: ?*render_gpu.Gpu3d = render_gpu.Gpu3d.create(gpa, io) catch |e| blk: {
+        std.debug.print("zengine unavailable ({s}) — software render everywhere\n", .{@errorName(e)});
+        break :blk null;
+    };
+    var main_view: ?*render_gpu.View = null;
     if (use_gpu) {
-        gpu3d = render_gpu.Gpu3d.create(gpa, io, gpu_w, gpu_h, max_instances) catch |e| blk: {
-            std.debug.print("GPU path unavailable ({s}) — software render\n", .{@errorName(e)});
+        if (gpu3d) |g| main_view = g.createView(gpu_w, gpu_h, max_instances, 0.45) catch |e| blk: {
+            std.debug.print("GPU view unavailable ({s}) — software render\n", .{@errorName(e)});
             break :blk null;
         };
     }
-    defer if (gpu3d) |g| g.destroy();
+    defer {
+        if (main_view) |v| v.destroy();
+        if (gpu3d) |g| g.destroy();
+    }
     var cpu = render_cpu.Cpu{ .gpa = gpa };
     defer cpu.deinit();
     var instances: []ze.gpu_mesh.Instance = try gpa.alloc(ze.gpu_mesh.Instance, max_instances);
@@ -244,7 +253,15 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const workers = @max(std.Thread.getCpuCount() catch 4, 2);
     const threads = try gpa.alloc(std.Thread, workers - 1);
     defer gpa.free(threads);
-    std.debug.print("render path: {s}\n", .{if (gpu3d != null) "GPU (zengine mesh raster + bloom, dmabuf)" else "CPU (software)"});
+    std.debug.print("render path: {s} · zengine device: {s}\n", .{
+        if (main_view != null) "GPU (zengine mesh raster + bloom, dmabuf)" else "CPU (software)",
+        if (gpu3d != null) "yes (inspector scenes use it)" else "no",
+    });
+
+    // Plugins can now reach the zengine device (the inspector renders its
+    // mini-scene on it even when the main window is on the software path).
+    app.gpu = gpu3d;
+    app_mod.dispatchInit(&app);
 
     var order: [n_pts]u16 = undefined; // CPU painter's order
     // GPU resize debounce: rebuild the raster once the size settles.
@@ -318,25 +335,26 @@ pub fn main(init: std.process.Init.Minimal) !void {
             if (cw > 0) rw = std.math.clamp(cw -| 16 -| app.reserve_w, 320, 1600) / 16 * 16;
             if (ch > 0) rh = std.math.clamp(ch -| 110, 240, 1000) / 16 * 16;
         }
-        if (gpu3d) |g| {
-            if (rw != g.w or rh != g.h) {
-                // Debounce, then rebuild the raster at the settled size (zrame
+        if (main_view) |v| {
+            if (rw != v.w or rh != v.h) {
+                // Debounce, then rebuild just the main VIEW at the settled size
+                // (the device and the popup's view are untouched; zrame
                 // recreates the slot wl_buffers when the size changes).
                 if (gpu_want_w != rw or gpu_want_h != rh) {
                     gpu_want_w = rw;
                     gpu_want_h = rh;
                     gpu_want_since = app.anim;
                 } else if (app.anim - gpu_want_since > 0.35) {
-                    g.destroy();
-                    gpu3d = render_gpu.Gpu3d.create(gpa, io, rw, rh, max_instances) catch |e| blk: {
+                    v.destroy();
+                    main_view = gpu3d.?.createView(rw, rh, max_instances, 0.45) catch |e| blk: {
                         std.debug.print("GPU resize failed ({s}) — software render\n", .{@errorName(e)});
                         break :blk null;
                     };
                 }
             }
-            if (gpu3d) |g2| {
-                rw = g2.w;
-                rh = g2.h;
+            if (main_view) |v2| {
+                rw = v2.w;
+                rh = v2.h;
             }
         }
         g_frame_w.store(rw, .monotonic);
@@ -372,7 +390,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const pairs = app_mod.edgePairs(&app);
 
         // --- draw ---------------------------------------------------------------------------
-        if (gpu3d) |g| {
+        if (main_view) |mv| {
             var count: usize = 0;
             const terr = 2.0 * dist * std.math.tan(fovy * 0.5) / @as(f32, @floatFromInt(rh)) * 1.5;
             for (0..n_pts) |i| {
@@ -386,7 +404,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
                         app.p3[i][0], app.p3[i][1], app.p3[i][2], 1,
                     },
                     .target_error = terr,
-                    .ref_range = g.sphere_range,
+                    .ref_range = gpu3d.?.sphere_range,
                     .material = .{
                         .base_color = .{ v.color[0] * 0.6, v.color[1] * 0.6, v.color[2] * 0.6 },
                         .emissive = .{ v.color[0] * v.glow, v.color[1] * v.glow, v.color[2] * v.glow },
@@ -425,7 +443,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
                         mid[0],     mid[1],     mid[2],     1,
                     },
                     .target_error = terr,
-                    .ref_range = g.tube_range,
+                    .ref_range = gpu3d.?.tube_range,
                     .material = .{
                         .base_color = .{ ev.color[0] * 0.3, ev.color[1] * 0.3, ev.color[2] * 0.3 },
                         .emissive = .{ ev.color[0] * ev.glow, ev.color[1] * ev.glow, ev.color[2] * ev.glow },
@@ -442,12 +460,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
             }
             const proj = perspective(fovy, @as(f32, @floatFromInt(rw)) / @as(f32, @floatFromInt(rh)), 0.1, 100.0);
             const view_proj = matMul(proj, lookAt(eye, .{ 0, 0, 0 }, .{ 0, 1, 0 }));
-            const img = &g.imgs[frame_no & 1];
+            const img = &mv.imgs[frame_no & 1];
             var gpu_ok = true;
-            g.raster.render(.{
+            mv.raster.render(.{
                 .view_proj = view_proj,
                 .instances = instances[0..count],
-                .resident_pages = g.total_pages,
+                .resident_pages = gpu3d.?.total_pages,
                 .eye = eye,
                 .sun_dir = .{ 0.4, 0.8, 0.45 },
                 // Midpoint of the software path's deep-space gradient, so the
@@ -473,8 +491,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 gpu_ok = false;
             }
             if (!gpu_ok) {
-                gpu3d.?.destroy();
-                gpu3d = null;
+                main_view.?.destroy();
+                main_view = null; // the device stays for the inspector's scenes
             }
         } else {
             // --- software path ---------------------------------------------------------

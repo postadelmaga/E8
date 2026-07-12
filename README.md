@@ -88,8 +88,12 @@ figure, and narrates it in the panel with precise citations:
 | 7 | 2407.02497 Fig 2 | the 192 fermion states, 8 disjoint 24-cells of the CPTt Group |
 
 Clicking a root opens the **inspector**: a separate frameless smoked-glass
-window with supplementary information and a live mini-scene of the particle's
-triality orbit, slowly turning. The side panel simultaneously swaps to **that
+window with supplementary information and a live **zengine mini-scene** —
+emissive spheres, glowing orbit tubes, HDR bloom, presented zero-copy as a
+dmabuf — showing the particle's triality orbit slowly turning against the
+dimmed system. It gets its own zengine view even when the main window renders
+in software (one device, several views); without Vulkan it falls back to the
+additive software raster. The side panel simultaneously swaps to **that
 particle's story** —
 which block it belongs to, what Lisi identifies it as, what is exact and what
 is interpretation, with citations into 0711.0770, 2407.02497, 1004.4866 and

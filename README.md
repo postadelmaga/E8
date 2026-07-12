@@ -70,19 +70,28 @@ charge (x1 → x2 → x3), and the 12 triality-fixed roots (W±, four eφ, the g
 hexagon) breathe slowly. On the GPU path the HDR bloom amplifies the pulses;
 the software path draws equivalent additive halos.
 
-### Paper atlas (`P`)
+### The paper journey (`P`)
 
-`P` steps through curated configurations that reproduce specific figures:
+`P` turns the explorer into a guided, interactive reading of the papers. The
+first press opens the side panel; each further press advances one slide. Every
+slide sets the projection, colors, edges and filter to reproduce a specific
+figure, and narrates it in the panel with precise citations:
 
-| stop | figure | what you see |
+| slide | figure | what you see |
 |---|---|---|
-| 1 | 0711.0770 Fig 2 | E8 Petrie plane with lines between triality partners |
-| 2 | 0711.0770 Table 2 | G2 strong charges: gluon hexagon, quark/antiquark triangles, leptons on the axis |
+| 1 | 0711.0770 Fig 2 | E8 Petrie plane, every root a particle, triality links |
+| 2 | 0711.0770 Table 2 | G2 strong charges: gluon hexagon, quark/antiquark triangles |
 | 3 | 0711.0770 Tables 5–6 | F4 graviweak plane (12-fold Petrie figure) with triality links |
-| 4 | 0711.0770 Figs 3–4 | animated F4↔G2 rotation (Lisi's e8rotation.mov); the central 72 at the G2 end are E6 |
+| 4 | 0711.0770 Figs 3–4 | animated F4↔G2 rotation (Lisi's e8rotation.mov); E6 at the G2 end |
 | 5 | 0711.0770 §2.4.1 | the new xΦ bosons alone, split in depth by their w charge |
-| 6 | 2407.02497 Tables 1–2 | spin(1,3) boost/spin weights: the lattice e1e2 plane *is* the (ωT, ωS) plane |
-| 7 | 2407.02497 Fig 2 | the 192 fermion states, three generations joined by triality links |
+| 6 | 2407.02497 Tables 1–2 | spin(1,3) boost/spin weights: lattice e1e2 *is* the (ωT, ωS) plane |
+| 7 | 2407.02497 Fig 2 | the 192 fermion states, 8 disjoint 24-cells of the CPTt Group |
+
+Clicking a root mid-journey swaps the panel to **that particle's story** —
+which block it belongs to, what Lisi identifies it as, what is exact and what
+is interpretation, with citations into 0711.0770, 2407.02497, 1004.4866 and
+the Distler–Garibaldi critique 0905.2658 where it applies. `P` resumes the
+tour; `Esc` closes the panel (and only then the app — layered).
 
 ## Controls
 
@@ -91,7 +100,10 @@ drag        orbit · scroll zoom · click pick a root (click empty space to clea
 1 / 2 / 3   projection: Coxeter plane · physics axes · lattice e1e2e3 (= Lisi's ωT,ωS spin-boost plane)
 4 / 5 / 6   paper views: G2 plane (g³,g⁸) · F4 graviweak plane · F4↔G2 rotation
             (in preset 6, ←/→ sweep the F4↔G2 angle and T animates the sweep)
-P           paper atlas: step through configurations matching the papers' figures
+P           the paper journey: opens the side panel on a guided slide, then
+            advances — each slide reproduces a figure of the papers AND
+            narrates it (citations included); click a root mid-journey for
+            that particle's own story, P resumes the tour
 ← / →       rotate the view basis through the current 8D plane · Tab next plane
 T           8D tumble · Space 3D auto-spin · R reset view
 E           edges: all → triality partners → selection-only → none
@@ -99,12 +111,38 @@ C           colors: physics classes → generations (triality) → so(16) 120⊕
 F           filter: all → bosons → fermions → gen I/II/III → leptons → quarks → d4 blocks
 G           jump the selected root to its triality partner (gen I → II → III → I)
 X           export e8_roots.csv (coordinates, labels, weights, charges, triality)
-Esc         quit
+Esc         layered: closes the panel first, then the app
 ```
 
 `X` writes the full system under the *current* projection — ready for
 numpy/pandas/Mathematica. The e8.zig module is dependency-free and usable on its
 own for scripted analysis.
+
+## Architecture: plugin-first
+
+The core (`src/main.zig`) owns only the window, the orbit camera, the 8D→3D
+projection and the two rasterizers. Every feature is a self-contained plugin
+in `src/plugins/`, registered once in `src/app.zig` and reached through
+optional hooks dispatched at compile time (`inline for` + `@hasDecl` — zero
+indirection, no vtables):
+
+| hook | when |
+|---|---|
+| `init` | once, after the root system is built |
+| `key(code) bool` | evdev keycode, render thread; first plugin to claim it wins |
+| `frame` | every frame, before the 8D→3D projection |
+| `post` | every frame, after screen positions are valid (picking, HUD) |
+| `visual(i, *Visual)` | per root, chained in registry order — later overrides earlier |
+| `edgePairs` / `edgeVisual` | which lines to draw and how |
+| `status(buf)` | contribution to the HUD status line |
+
+Current plugins: `projections` (presets 1-6, tumble, spin, reset), `colors`
+(C + legends), `filters` (F), `edges` (E: lattice/triality/selection),
+`selection` (picking, G, detail line), `effects` (xΦ wave, triality-fixed
+breathing, orbit lighthouse), `atlas` (A), `panel` (P), `exporter` (X).
+Adding a feature = one file in `src/plugins/` + one line in
+`app_mod.plugin_list`. Plugin state is plain data (`P.State`) — all hooks run
+on the render thread; cross-thread traffic stays in the core.
 
 ## Build & run
 

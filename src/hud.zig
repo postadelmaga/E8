@@ -36,6 +36,12 @@ pub const Hud = struct {
     /// render thread reads) — the hook the adaptive CPU render sizes off.
     content_w: std.atomic.Value(u32) = .init(0),
     content_h: std.atomic.Value(u32) = .init(0),
+    /// Size of the presented video frame (render thread writes) — lets the
+    /// panel find the glass band to the right of the centered frame.
+    frame_w: std.atomic.Value(u32) = .init(0),
+    frame_h: std.atomic.Value(u32) = .init(0),
+    /// Side panel visibility (render thread writes, window thread reads).
+    panel_on: std.atomic.Value(bool) = .init(false),
     ms_bits: std.atomic.Value(u32) = .init(0),
     last_ns: i128 = 0,
     ema_ms: f32 = 0,
@@ -47,6 +53,12 @@ pub const Hud = struct {
     len2: usize = 0,
     legend: [10]LegendItem = undefined,
     n_legend: usize = 0,
+    p_title: [96]u8 = undefined,
+    p_title_len: usize = 0,
+    p_body: [720]u8 = undefined,
+    p_body_len: usize = 0,
+    p_cite: [256]u8 = undefined,
+    p_cite_len: usize = 0,
 
     pub fn tick(self: *Hud, now_ns: i128) void {
         defer self.last_ns = now_ns;
@@ -72,6 +84,19 @@ pub const Hud = struct {
         self.len2 = n;
     }
 
+    /// Side-panel content: title, body (paragraphs split on '\n', word-wrapped
+    /// at draw time), and the paper citations drawn dimmer underneath.
+    pub fn setPanel(self: *Hud, title: []const u8, body: []const u8, cite: []const u8) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.p_title_len = @min(title.len, self.p_title.len);
+        @memcpy(self.p_title[0..self.p_title_len], title[0..self.p_title_len]);
+        self.p_body_len = @min(body.len, self.p_body.len);
+        @memcpy(self.p_body[0..self.p_body_len], body[0..self.p_body_len]);
+        self.p_cite_len = @min(cite.len, self.p_cite.len);
+        @memcpy(self.p_cite[0..self.p_cite_len], cite[0..self.p_cite_len]);
+    }
+
     pub const LegendIn = struct { rgb: [3]u8, label: []const u8 };
 
     pub fn setLegend(self: *Hud, items: []const LegendIn) void {
@@ -83,6 +108,63 @@ pub const Hud = struct {
             dst.len = @min(src.label.len, dst.label.len);
             @memcpy(dst.label[0..dst.len], src.label[0..dst.len]);
         }
+    }
+
+    /// Draw `txt` word-wrapped in a column `w` px wide starting at baseline
+    /// `y0`; paragraphs split on '\n'. Returns the baseline after the last line.
+    fn drawWrapped(
+        canvas: *zrame.Canvas,
+        font: anytype,
+        x: i32,
+        y0: i32,
+        w: i32,
+        comptime size: comptime_int,
+        comptime style: @TypeOf(.enum_literal),
+        color: zrame.Color,
+        txt: []const u8,
+        line_h: i32,
+    ) i32 {
+        var y = y0;
+        var paras = std.mem.splitScalar(u8, txt, '\n');
+        while (paras.next()) |para| {
+            if (para.len == 0) {
+                y += @divTrunc(line_h, 2);
+                continue;
+            }
+            var words = std.mem.tokenizeScalar(u8, para, ' ');
+            var line_start: ?usize = null;
+            var line_end: usize = 0;
+            while (words.next()) |word| {
+                const ws = @intFromPtr(word.ptr) - @intFromPtr(para.ptr);
+                const we = ws + word.len;
+                if (line_start == null) {
+                    line_start = ws;
+                    line_end = we;
+                    continue;
+                }
+                if (font.measure(size, style, para[line_start.?..we]) <= w) {
+                    line_end = we;
+                } else {
+                    canvas.drawText(font, x, y, para[line_start.?..line_end], .{
+                        .size = size,
+                        .style = style,
+                        .color = color,
+                    });
+                    y += line_h;
+                    line_start = ws;
+                    line_end = we;
+                }
+            }
+            if (line_start) |ls| {
+                canvas.drawText(font, x, y, para[ls..line_end], .{
+                    .size = size,
+                    .style = style,
+                    .color = color,
+                });
+                y += line_h;
+            }
+        }
+        return y;
     }
 
     pub fn onDraw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
@@ -101,16 +183,28 @@ pub const Hud = struct {
         var l1: [160]u8 = undefined;
         var l2: [200]u8 = undefined;
         var leg: [10]LegendItem = undefined;
+        var pt: [96]u8 = undefined;
+        var pb: [720]u8 = undefined;
+        var pc: [256]u8 = undefined;
         var n1: usize = 0;
         var n2: usize = 0;
         var nl: usize = 0;
+        var npt: usize = 0;
+        var npb: usize = 0;
+        var npc: usize = 0;
         if (self.lock.tryLock()) {
             n1 = self.len1;
             n2 = self.len2;
             nl = self.n_legend;
+            npt = self.p_title_len;
+            npb = self.p_body_len;
+            npc = self.p_cite_len;
             @memcpy(l1[0..n1], self.line1[0..n1]);
             @memcpy(l2[0..n2], self.line2[0..n2]);
             @memcpy(leg[0..nl], self.legend[0..nl]);
+            @memcpy(pt[0..npt], self.p_title[0..npt]);
+            @memcpy(pb[0..npb], self.p_body[0..npb]);
+            @memcpy(pc[0..npc], self.p_cite[0..npc]);
             self.lock.unlock();
         }
 
@@ -134,6 +228,31 @@ pub const Hud = struct {
             .style = .regular,
             .color = zrame.Color.rgba(235, 220, 160, 0.95),
         });
+
+        // Side panel: the glass band to the right of the centered video frame
+        // (same centering math as chrome.frameOrigin).
+        if (self.panel_on.load(.monotonic) and npt > 0) {
+            const fw = @min(self.frame_w.load(.monotonic), content.w);
+            const ox = content.x + (content.w - fw) / 2;
+            const px: i32 = @intCast(ox + fw + 16);
+            const pw: i32 = @as(i32, @intCast(content.x + content.w)) -| px - 14;
+            if (pw >= 140) {
+                const top: i32 = @intCast(content.y + 78);
+                canvas.fillRoundedRect(
+                    @floatFromInt(px - 10),
+                    @floatFromInt(top - 16),
+                    2,
+                    @floatFromInt(@max(@as(i32, @intCast(content.h)) - 140, 40)),
+                    1,
+                    zrame.Color.rgba(120, 140, 180, 0.35),
+                );
+                var y = drawWrapped(canvas, font, px, top, pw, 15, .bold, zrame.Color.rgba(235, 220, 160, 0.95), pt[0..npt], 20);
+                y += 8;
+                y = drawWrapped(canvas, font, px, y, pw, 13, .regular, zrame.Color.rgba(202, 208, 216, 0.92), pb[0..npb], 18);
+                y += 10;
+                _ = drawWrapped(canvas, font, px, y, pw, 12, .regular, zrame.Color.rgba(150, 180, 230, 0.88), pc[0..npc], 16);
+            }
+        }
 
         // Legend row along the bottom band: colored dot + label per class.
         if (nl > 0) {

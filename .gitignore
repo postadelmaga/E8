@@ -1,0 +1,5 @@
+.zig-cache/
+zig-out/
+e8-scene.gpak
+e8_roots.csv
+zig-pkg/

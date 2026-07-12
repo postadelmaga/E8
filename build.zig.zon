@@ -1,0 +1,23 @@
+.{
+    .name = .e8,
+    .version = "0.0.0",
+    .fingerprint = 0x71513583f0a538a1, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zengine = .{
+            .path = "../Zengine",
+        },
+        .zrame = .{
+            .path = "../Zrame",
+        },
+        .zicro = .{
+            .path = "../Zicro",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+    },
+}

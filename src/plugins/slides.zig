@@ -6,6 +6,8 @@
 //! P resumes the tour. Esc closes the topmost layer first (panel → app).
 
 const std = @import("std");
+const e8 = @import("../e8.zig");
+const hud_mod = @import("../hud.zig");
 const app_mod = @import("../app.zig");
 const App = app_mod.App;
 const projections = @import("projections.zig");
@@ -18,7 +20,21 @@ pub const id = "slides";
 
 pub const State = struct {
     idx: usize = 0,
+    /// Kiosk mode (K): auto-advance after each slide's dwell time.
+    auto: bool = false,
+    auto_t: f32 = 0,
+    /// Smooth basis transition between slides (1 = settled).
+    tr_from: e8.Basis = undefined,
+    tr_to: e8.Basis = undefined,
+    tr_t: f32 = 1,
+    /// Camera choreography (1 = settled).
+    cam_from: [3]f32 = .{ 0, 0, 0 },
+    cam_to: [3]f32 = .{ 0, 0, 0 },
+    cam_t: f32 = 1,
 };
+
+/// Inline panel diagram computed live from the root system.
+const Fig = enum { none, g2, f4, spin13 };
 
 const Slide = struct {
     title: []const u8,
@@ -29,6 +45,11 @@ const Slide = struct {
     edge: u32,
     filter: u32,
     tumble: bool = false,
+    /// Camera target (yaw, pitch, dist) eased in over ~1.2 s.
+    cam: ?[3]f32 = null,
+    /// Kiosk dwell time, seconds.
+    dwell: f32 = 22,
+    fig: Fig = .none,
 };
 
 const slides = [_]Slide{
@@ -40,6 +61,7 @@ const slides = [_]Slide{
         .color = 0,
         .edge = 3,
         .filter = 0,
+        .cam = .{ 0.65, 0.35, 4.2 },
     },
     .{
         .title = "Strong charges: the G2 picture",
@@ -49,6 +71,8 @@ const slides = [_]Slide{
         .color = 0,
         .edge = 0,
         .filter = 0,
+        .cam = .{ 0.10, 0.95, 5.0 },
+        .fig = .g2,
     },
     .{
         .title = "The graviweak F4",
@@ -58,6 +82,8 @@ const slides = [_]Slide{
         .color = 1,
         .edge = 3,
         .filter = 0,
+        .cam = .{ 0.40, 0.25, 4.6 },
+        .fig = .f4,
     },
     .{
         .title = "Rotating F4 into G2",
@@ -68,6 +94,8 @@ const slides = [_]Slide{
         .edge = 0,
         .filter = 0,
         .tumble = true,
+        .cam = .{ 0.65, 0.20, 4.4 },
+        .dwell = 30,
     },
     .{
         .title = "New particles: xΦ and w",
@@ -77,6 +105,8 @@ const slides = [_]Slide{
         .color = 0,
         .edge = 0,
         .filter = 9,
+        .cam = .{ 0.20, 0.75, 5.2 },
+        .fig = .g2,
     },
     .{
         .title = "Gravitational weights (2024)",
@@ -86,6 +116,8 @@ const slides = [_]Slide{
         .color = 2,
         .edge = 0,
         .filter = 0,
+        .cam = .{ 1.20, 0.30, 5.0 },
+        .fig = .spin13,
     },
     .{
         .title = "Three generations, eight 24-cells",
@@ -95,13 +127,15 @@ const slides = [_]Slide{
         .color = 1,
         .edge = 3,
         .filter = 2,
+        .cam = .{ 0.65, 0.35, 4.0 },
+        .dwell = 28,
     },
 };
 
 pub fn key(a: *App, code: u32) bool {
+    const st = a.pluginState(@This());
     switch (code) {
         25 => { // P: start the journey, or next slide
-            const st = a.pluginState(@This());
             if (!a.pluginState(panel).on) {
                 panel.setOpen(a, true);
             } else {
@@ -110,10 +144,22 @@ pub fn key(a: *App, code: u32) bool {
             show(a, st.idx);
             return true;
         },
+        37 => { // K: kiosk mode — auto-advance through the deck
+            st.auto = !st.auto;
+            st.auto_t = 0;
+            if (st.auto and !a.pluginState(panel).on) {
+                panel.setOpen(a, true);
+                show(a, st.idx);
+            }
+            a.status_dirty = true;
+            return true;
+        },
         1 => { // Esc: close the topmost layer first, then the app
             if (a.pluginState(panel).on) {
                 panel.setOpen(a, false);
+                st.auto = false;
                 a.hud.setLine2("journey paused — P resumes where you left off");
+                a.status_dirty = true;
                 return true;
             }
             a.win.close();
@@ -123,9 +169,118 @@ pub fn key(a: *App, code: u32) bool {
     }
 }
 
+fn smooth(t: f32) f32 {
+    return t * t * (3.0 - 2.0 * t);
+}
+
+pub fn frame(a: *App) void {
+    const st = a.pluginState(@This());
+    // Slide-to-slide basis transition (skipped for the self-animating preset 6):
+    // linear blend, re-orthonormalized by the core every frame.
+    if (st.tr_t < 1) {
+        st.tr_t = @min(1.0, st.tr_t + a.dt / 1.2);
+        const t = smooth(st.tr_t);
+        for (0..3) |r| {
+            for (0..8) |c| a.basis[r][c] = st.tr_from[r][c] * (1 - t) + st.tr_to[r][c] * t;
+        }
+    }
+    // Camera choreography.
+    if (st.cam_t < 1) {
+        st.cam_t = @min(1.0, st.cam_t + a.dt / 1.2);
+        const t = smooth(st.cam_t);
+        app_mod.storeF32(&app_mod.cam_yaw, st.cam_from[0] * (1 - t) + st.cam_to[0] * t);
+        app_mod.storeF32(&app_mod.cam_pitch, st.cam_from[1] * (1 - t) + st.cam_to[1] * t);
+        app_mod.storeF32(&app_mod.cam_dist, st.cam_from[2] * (1 - t) + st.cam_to[2] * t);
+    }
+    // Kiosk auto-advance.
+    if (st.auto and a.pluginState(panel).on) {
+        st.auto_t += a.dt;
+        if (st.auto_t > slides[st.idx].dwell) {
+            st.idx = (st.idx + 1) % slides.len;
+            show(a, st.idx);
+        }
+    }
+}
+
+pub fn status(a: *App, buf: []u8) []const u8 {
+    _ = buf;
+    return if (a.pluginState(@This()).auto) "kiosk (K stops)" else "";
+}
+
+/// Build the slide's inline diagram from the live root system.
+fn figure(a: *App, fig: Fig) void {
+    if (fig == .none) return;
+    var dots: [72]hud_mod.FigDot = undefined;
+    var n: usize = 0;
+    for (&a.roots) |*r| {
+        var x: f32 = 0;
+        var y: f32 = 0;
+        var rgb: [3]f32 = undefined;
+        switch (fig) {
+            .g2 => { // su(3) weight diagram: hexagon + triangles + center
+                x = r.t3;
+                y = r.t8 * @sqrt(3.0) * 0.85;
+                rgb = e8.rootRgb(r, .physics, 0);
+            },
+            .f4 => { // graviweak F4 Petrie projection (coords 1-4)
+                const p = e8.f4Petrie();
+                x = e8.dot8(p[0], .{ r.v[0], r.v[1], r.v[2], r.v[3], 0, 0, 0, 0 }) / 1.5;
+                y = e8.dot8(p[1], .{ r.v[0], r.v[1], r.v[2], r.v[3], 0, 0, 0, 0 }) / 1.5;
+                rgb = e8.rootRgb(r, .generation, 0);
+            },
+            .spin13 => { // 2024 Table 1: boost/spin weights (ωT, ωS)
+                x = r.v[0] * 0.9;
+                y = r.v[1] * 0.9;
+                rgb = e8.rootRgb(r, .physics, 0);
+            },
+            .none => unreachable,
+        }
+        // Dedup on a coarse grid; many roots share the same 2D weight.
+        var dup = false;
+        for (dots[0..n]) |d| {
+            if (@abs(d.x - x) < 0.03 and @abs(d.y - y) < 0.03) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+        dots[n] = .{
+            .x = std.math.clamp(x, -1, 1),
+            .y = std.math.clamp(y, -1, 1),
+            .rgb = .{
+                @intFromFloat(std.math.clamp(rgb[0], 0, 1) * 255),
+                @intFromFloat(std.math.clamp(rgb[1], 0, 1) * 255),
+                @intFromFloat(std.math.clamp(rgb[2], 0, 1) * 255),
+            },
+        };
+        n += 1;
+        if (n == dots.len) break;
+    }
+    a.hud.setPanelFigure(dots[0..n]);
+}
+
 fn show(a: *App, idx: usize) void {
     const s = &slides[idx];
+    const st = a.pluginState(@This());
+    st.auto_t = 0;
+    // Set up the smooth basis transition: from wherever we are to the slide's
+    // projection. Preset 6 animates itself, so it snaps instead.
+    st.tr_from = a.basis;
     projections.apply(a, s.preset);
+    if (s.preset != 6) {
+        st.tr_to = a.basis;
+        st.tr_t = 0;
+        a.basis = st.tr_from;
+    } else st.tr_t = 1;
+    if (s.cam) |c| {
+        st.cam_from = .{
+            app_mod.loadF32(&app_mod.cam_yaw),
+            app_mod.loadF32(&app_mod.cam_pitch),
+            app_mod.loadF32(&app_mod.cam_dist),
+        };
+        st.cam_to = c;
+        st.cam_t = 0;
+    }
     a.pluginState(projections).tumble = s.tumble;
     a.pluginState(colors).mode = s.color;
     a.pluginState(colors).pushed = 99; // force a legend refresh
@@ -134,6 +289,7 @@ fn show(a: *App, idx: usize) void {
     var tbuf: [96]u8 = undefined;
     const title = std.fmt.bufPrint(&tbuf, "{d}/{d} — {s}", .{ idx + 1, slides.len, s.title }) catch s.title;
     a.hud.setPanel(title, s.body, s.cite);
+    figure(a, s.fig);
     var lbuf: [120]u8 = undefined;
     a.hud.setLine2(std.fmt.bufPrint(&lbuf, "paper journey {d}/{d} — P next slide · click a root for its story · Esc closes", .{ idx + 1, slides.len }) catch "");
     a.status_dirty = true;

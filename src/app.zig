@@ -42,6 +42,7 @@ pub const plugin_list = .{
     @import("plugins/effects.zig"),
     @import("plugins/slides.zig"),
     @import("plugins/panel.zig"),
+    @import("plugins/inspector.zig"),
     @import("plugins/exporter.zig"),
 };
 
@@ -200,6 +201,12 @@ pub const App = struct {
 pub fn dispatchInit(a: *App) void {
     inline for (plugin_list) |P| {
         if (comptime @hasDecl(P, "init")) P.init(a);
+    }
+}
+
+pub fn dispatchDeinit(a: *App) void {
+    inline for (plugin_list) |P| {
+        if (comptime @hasDecl(P, "deinit")) P.deinit(a);
     }
 }
 

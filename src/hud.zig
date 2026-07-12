@@ -29,6 +29,10 @@ pub const LegendItem = struct {
     len: usize = 0,
 };
 
+/// One dot of the panel's inline figure (a 2D weight/root diagram), in
+/// normalized coordinates: x, y ∈ [-1, 1], y up.
+pub const FigDot = struct { x: f32, y: f32, rgb: [3]u8 };
+
 pub const Hud = struct {
     /// Wired AFTER `Window.init` returns (init dispatches an initial redraw).
     win: ?*zrame.Window = null,
@@ -59,6 +63,8 @@ pub const Hud = struct {
     p_body_len: usize = 0,
     p_cite: [256]u8 = undefined,
     p_cite_len: usize = 0,
+    p_fig: [72]FigDot = undefined,
+    p_fig_len: usize = 0,
 
     pub fn tick(self: *Hud, now_ns: i128) void {
         defer self.last_ns = now_ns;
@@ -95,6 +101,16 @@ pub const Hud = struct {
         @memcpy(self.p_body[0..self.p_body_len], body[0..self.p_body_len]);
         self.p_cite_len = @min(cite.len, self.p_cite.len);
         @memcpy(self.p_cite[0..self.p_cite_len], cite[0..self.p_cite_len]);
+        self.p_fig_len = 0; // a new panel page clears the figure
+    }
+
+    /// Inline 2D diagram drawn under the panel citation (weight diagrams,
+    /// root projections). Call after `setPanel`.
+    pub fn setPanelFigure(self: *Hud, dots: []const FigDot) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.p_fig_len = @min(dots.len, self.p_fig.len);
+        @memcpy(self.p_fig[0..self.p_fig_len], dots[0..self.p_fig_len]);
     }
 
     pub const LegendIn = struct { rgb: [3]u8, label: []const u8 };
@@ -112,7 +128,7 @@ pub const Hud = struct {
 
     /// Draw `txt` word-wrapped in a column `w` px wide starting at baseline
     /// `y0`; paragraphs split on '\n'. Returns the baseline after the last line.
-    fn drawWrapped(
+    pub fn drawWrapped(
         canvas: *zrame.Canvas,
         font: anytype,
         x: i32,
@@ -186,12 +202,14 @@ pub const Hud = struct {
         var pt: [96]u8 = undefined;
         var pb: [720]u8 = undefined;
         var pc: [256]u8 = undefined;
+        var pf: [72]FigDot = undefined;
         var n1: usize = 0;
         var n2: usize = 0;
         var nl: usize = 0;
         var npt: usize = 0;
         var npb: usize = 0;
         var npc: usize = 0;
+        var npf: usize = 0;
         if (self.lock.tryLock()) {
             n1 = self.len1;
             n2 = self.len2;
@@ -199,12 +217,14 @@ pub const Hud = struct {
             npt = self.p_title_len;
             npb = self.p_body_len;
             npc = self.p_cite_len;
+            npf = self.p_fig_len;
             @memcpy(l1[0..n1], self.line1[0..n1]);
             @memcpy(l2[0..n2], self.line2[0..n2]);
             @memcpy(leg[0..nl], self.legend[0..nl]);
             @memcpy(pt[0..npt], self.p_title[0..npt]);
             @memcpy(pb[0..npb], self.p_body[0..npb]);
             @memcpy(pc[0..npc], self.p_cite[0..npc]);
+            @memcpy(pf[0..npf], self.p_fig[0..npf]);
             self.lock.unlock();
         }
 
@@ -250,7 +270,21 @@ pub const Hud = struct {
                 y += 8;
                 y = drawWrapped(canvas, font, px, y, pw, 13, .regular, zrame.Color.rgba(202, 208, 216, 0.92), pb[0..npb], 18);
                 y += 10;
-                _ = drawWrapped(canvas, font, px, y, pw, 12, .regular, zrame.Color.rgba(150, 180, 230, 0.88), pc[0..npc], 16);
+                y = drawWrapped(canvas, font, px, y, pw, 12, .regular, zrame.Color.rgba(150, 180, 230, 0.88), pc[0..npc], 16);
+                // Inline figure: a boxed 2D diagram (weights, root projections).
+                if (npf > 0) {
+                    y += 12;
+                    const fig_w: f32 = @floatFromInt(@min(pw - 8, 220));
+                    const fig_h: f32 = fig_w * 0.72;
+                    const fx: f32 = @floatFromInt(px);
+                    const fy: f32 = @floatFromInt(y);
+                    canvas.fillRoundedRect(fx, fy, fig_w, fig_h, 8, zrame.Color.rgba(16, 20, 34, 0.55));
+                    for (pf[0..npf]) |d| {
+                        const dx = fx + (d.x * 0.44 + 0.5) * fig_w - 3;
+                        const dy = fy + (0.5 - d.y * 0.44) * fig_h - 3;
+                        canvas.fillRoundedRect(dx, dy, 6, 6, 3, zrame.Color.rgba(d.rgb[0], d.rgb[1], d.rgb[2], 0.95));
+                    }
+                }
             }
         }
 

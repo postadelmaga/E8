@@ -262,6 +262,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
     std.debug.print("render path: {s}\n", .{if (gpu3d != null) "GPU (zengine mesh raster + bloom, dmabuf)" else "CPU (software)"});
 
     var order: [e8.n_roots]u16 = undefined; // CPU painter's order
+    // GPU resize debounce: rebuild the raster once the size settles.
+    var gpu_want_w: u32 = gpu_w;
+    var gpu_want_h: u32 = gpu_h;
+    var gpu_want_since: f32 = 0;
 
     var frame_no: u64 = 0;
     var fps_frames: u32 = 0;
@@ -319,15 +323,36 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const right = norm3(cross3(fwd, .{ 0, 1, 0 }));
         const up = cross3(right, fwd);
 
-        // Render resolution: the GPU path is fixed; the CPU path follows the
-        // window, minus whatever glass a plugin reserved (the particle panel).
+        // Render resolution: both paths follow the window, minus whatever
+        // glass a plugin reserved (the particle panel).
         var rw: u32 = gpu_w;
         var rh: u32 = gpu_h;
-        if (gpu3d == null) {
+        {
             const cw = hud.content_w.load(.monotonic);
             const ch = hud.content_h.load(.monotonic);
             if (cw > 0) rw = std.math.clamp(cw -| 16 -| app.reserve_w, 320, 1600) / 16 * 16;
             if (ch > 0) rh = std.math.clamp(ch -| 110, 240, 1000) / 16 * 16;
+        }
+        if (gpu3d) |g| {
+            if (rw != g.w or rh != g.h) {
+                // Debounce, then rebuild the raster at the settled size (zrame
+                // recreates the slot wl_buffers when the size changes).
+                if (gpu_want_w != rw or gpu_want_h != rh) {
+                    gpu_want_w = rw;
+                    gpu_want_h = rh;
+                    gpu_want_since = app.anim;
+                } else if (app.anim - gpu_want_since > 0.35) {
+                    g.destroy();
+                    gpu3d = render_gpu.Gpu3d.create(gpa, io, rw, rh, max_instances) catch |e| blk: {
+                        std.debug.print("GPU resize failed ({s}) — software render\n", .{@errorName(e)});
+                        break :blk null;
+                    };
+                }
+            }
+            if (gpu3d) |g2| {
+                rw = g2.w;
+                rh = g2.h;
+            }
         }
         g_frame_w.store(rw, .monotonic);
         g_frame_h.store(rh, .monotonic);
@@ -430,7 +455,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 var ts = std.os.linux.timespec{ .sec = 0, .nsec = 200_000 };
                 _ = std.os.linux.nanosleep(&ts, null);
             }
-            const proj = perspective(fovy, @as(f32, @floatFromInt(gpu_w)) / gpu_h, 0.1, 100.0);
+            const proj = perspective(fovy, @as(f32, @floatFromInt(rw)) / @as(f32, @floatFromInt(rh)), 0.1, 100.0);
             const view_proj = matMul(proj, lookAt(eye, .{ 0, 0, 0 }, .{ 0, 1, 0 }));
             const img = &g.imgs[frame_no & 1];
             var gpu_ok = true;
@@ -525,5 +550,6 @@ pub fn main(init: std.process.Init.Minimal) !void {
             fps_last = now;
         }
     }
+    app_mod.dispatchDeinit(&app);
     win_thread.join();
 }

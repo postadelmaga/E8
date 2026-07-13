@@ -1,0 +1,49 @@
+// The tour of a structure. It names no molecule: it explains what is drawn and
+// what can be measured. Copy it next to your PDB and edit it (F5 reloads).
+.{
+    .slides = .{
+        .{
+            .title = "The structure, as deposited",
+            .body = "Every atom of the file, in the frame it was deposited in, colored CPK — the palette you already read without a legend.\nThe sticks are bonds: the ones the file declared (CONECT), plus the ones implied by covalent radii, because a PDB usually declares only its ligands and a protein would otherwise come up as loose dust.",
+            .cite = "Covalent radii: Cordero et al., Dalton Trans. 2008. Bond tolerance r₁+r₂+0.4 Å.",
+            .preset = "as deposited",
+            .color = "elements (CPK)",
+            .edge = "all",
+            .cam = .{ 0.65, 0.35, 3.6 },
+        },
+        .{
+            .title = "Chains and ligands",
+            .body = "Color by chain: each polymer gets its own hue, and everything the file called HETATM — ligands, ions, waters — turns amber. That is the first question of any structure paper: what is protein, what is bound to it, and where.\nF filters: heavy atoms only, backbone only, ligands only, one chain at a time.",
+            .preset = "principal (inertia) axes",
+            .color = "chains",
+            .edge = "all",
+            .cam = .{ 1.0, 0.3, 3.4 },
+        },
+        .{
+            .title = "What the residues do",
+            .body = "Color by residue chemistry: hydrophobic amber, polar green, acidic red, basic blue. This is the fold's own logic — hydrophobics inside, charges out — and you can see it hold or break by orbiting once.",
+            .preset = "principal (inertia) axes",
+            .color = "residue chemistry",
+            .edge = "all",
+            .cam = .{ 0.4, 0.5, 3.0 },
+        },
+        .{
+            .title = "How much to trust each atom",
+            .body = "The B-factor: blue where the density pinned the atom down, red where the model is guessing. Flexible loops and surface side chains light up red — and a ligand with red atoms is a ligand you should not build a story on.\nThe figure below plots B along the file's atom order.",
+            .cite = "Temperature factors are the crystallographer's error bars; they are printed on every deposited structure.",
+            .preset = "principal (inertia) axes",
+            .color = "B-factor",
+            .edge = "all",
+            .cam = .{ 0.7, 0.25, 3.2 },
+            .fig = "bfactor",
+        },
+        .{
+            .title = "The ruler",
+            .body = "Click an atom, press M to mark it, then click another: the HUD reads the distance in ångström. Under ~3.5 Å between an N/O pair is a hydrogen bond; under the sum of the van der Waals radii is a clash; around 2 Å from a metal is coordination.\nThe mark breathes so you never lose the other end of your ruler. Press M on it again to drop it. X exports every atom, its bonds and its B-factor as a CSV.",
+            .preset = "spin",
+            .color = "elements (CPK)",
+            .edge = "all",
+            .cam = .{ 0.65, 0.35, 2.6 },
+        },
+    },
+}

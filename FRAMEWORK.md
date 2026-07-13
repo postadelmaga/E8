@@ -8,11 +8,21 @@ to 3D, lets you steer, select, filter and narrate. Everything else comes from a
 **domain package**.
 
 ```
-zig build run                      # the Lisi E8 interactive paper (default)
-zig build run -- --gpu             # zengine mesh raster + HDR bloom
-zig build -Ddemo=molecule run      # caffeine, ball-and-stick
-zig build -Ddemo=polytope run      # the 24-cell, guided tour
+zig build run                              # the LAUNCHER: pick a demo, or author one
+zig build run-demo -Ddemo=mtheory -- --gpu # one demo, straight (the dev loop)
 ```
+
+`zig build` produces one executable **per demo** — `e8-lisi`, `e8-mtheory`, … —
+plus `e8-menu`. It has to: a domain's `Point` type and its `dim` are comptime
+(`geom.Vec = [dim]f32`), so an 8-dimensional demo and a 3-dimensional one are
+different programs. The launcher carries no domain and starts whichever you pick.
+
+A domain may build on another (`mtheory` imports `demos/lisi/e8.zig` and its 240
+roots become E10's level 0), and it may carry **its own plugins**: a file in the
+demo's folder listed in its `plugins` tuple is dispatched exactly like a
+framework one. `demos/mtheory/cinema.zig` is the worked example — it owns the
+Big Bang mode, and it drives the projection basis from a cosmological billiard
+rather than from the preset table.
 
 ## Architecture
 
@@ -77,9 +87,72 @@ pub const deck_path = "deck.zon";                 // hot-reloaded from cwd (F5)
 pub const deck_default = @embedFile("deck.zon");  // fallback, compiled in
 ```
 
-Then add it to the switch in `src/domain.zig` and to the `-Ddemo` option in
-`build.zig`. That is the whole contract — `src/demos/lisi/domain.zig` is the
+Then add it to the switch in `src/domain.zig` and to the `demos` list in
+`build.zig` (which is what gives it its own executable and a place in the
+launcher). That is the whole contract — `src/demos/lisi/domain.zig` is the
 worked reference, `molecule` the smallest one.
+
+### Domains that read a file
+
+A domain does not have to *generate* its points. Instead of `n` + `generate()`
+it may export:
+
+```zig
+pub fn load(gpa, io) ![]Point     // read the file named on the command line
+pub fn unload(gpa) void           // release whatever it kept alongside the points
+```
+
+The point count is then a **runtime** value: nothing in the framework is sized at
+comptime off `n`, and `a.count()` is the truth everywhere. What the user typed
+reaches the domain through `app.cli` (`file`, `coords`, `class`, `label`, `knn`),
+filled from argv before the domain loads.
+
+The menus can be runtime too: `presets`, `color_modes`, `filters` and `relations`
+are read as slices, so a loading domain declares them `pub var` and fills them
+once it has seen the data — one color mode per numeric column, one filter per
+class. The plugins never notice the difference.
+
+`src/demos/data/` is the reference: it reads ANY delimited table (`table.zig`
+sniffs the delimiter and infers each column's type), turns the numeric columns
+into standardized coordinates in R^k, the categorical one into classes, builds
+the k-nearest-neighbor graph and the principal axes, and ships a deck that
+explains what it just did to the reader.
+
+```
+zig build -Ddemo=data run -- iris.csv
+zig build -Ddemo=data run -- vecs.tsv --coords=x,y,z,w --class=label --knn=8
+```
+
+### Field profiles — the domains a working scientist opens
+
+A *profile* is a loading domain that knows one field: its file formats, the
+projections that field argues about, the colors it reads without a legend, and
+the one tool it cannot work without. Each is one directory; the framework is
+untouched.
+
+| profile | opens | projections | colors | its tool |
+|---|---|---|---|---|
+| `data` | any CSV/TSV | principal axes, raw axes | class, a ramp per numeric column | k-NN graph, nearest neighbor (N) |
+| `embed` | `.npy`, CSV | **PCA ⇄ t-SNE, in the same point** | labels, k-means clusters, neighbor agreement | cosine k-NN, 5 nearest listed (N) |
+| `chem` | PDB, XYZ | as deposited, inertia axes | CPK elements, chains, residue chemistry, B-factor | **the ruler: M marks an atom, distances in Å** |
+| `graph` | GraphML, edge list | **the Laplacian spectrum** | communities (label propagation), degree, components | clustering coefficient, hub climb (H) |
+| `astro` | catalog CSV (Gaia/HYG/SIMBAD) | equatorial, galactic plane | blackbody stellar color, distance, luminosity | **the HR diagram**, nearest star (N) |
+
+Two of them make the framework's central trick mean something field-specific.
+The **embeddings** profile puts the principal components in coordinates 0..12 and
+the t-SNE embedding in 13..15 of the *same* R^16 point, so switching view is a
+change of basis, not a reload — the selection, the neighbors and the colors
+follow you across, and the k-NN graph (computed in the original space, by cosine)
+shows you exactly where each projection lies. The **network** profile lays the
+graph out on its own Laplacian eigenvectors, so "rotate the hidden dimensions
+into view" *is* walking up the spectrum.
+
+```
+zig build -Ddemo=embed run -- vectors.npy --label=names.txt --knn=8
+zig build -Ddemo=chem  run -- 1ubq.pdb
+zig build -Ddemo=graph run -- karate.txt
+zig build -Ddemo=astro run -- gaia.csv
+```
 
 ### Object descriptors — how things look
 
@@ -108,6 +181,42 @@ meshes) and hands out **views** — a raster plus export images per window. The
 main window takes one with `--gpu`; the inspector popup always takes one, so
 its mini-scene is zengine-rendered even while the main window is on the
 software path, and a main-window resize rebuilds only its own view.
+
+#### A mesh of the domain's own
+
+The framework bakes two meshes and knows what they are for: a sphere per point, a
+tube per edge. Beyond that it has no opinions, so a domain may hand over meshes of
+its own and place them in the inspector's scene:
+
+```zig
+pub const extra_parts = 25;                                  // how many, so instances can be sized
+pub fn extraMeshes(gpa) ![]desc.MeshData { … }               // baked once, at startup
+pub fn sceneExtra(a: *App, i: usize, part: usize) ?desc.Extra // placed per selected point
+```
+
+`MeshData` is interleaved `pos3 / nrm3 / uv2`; `Extra` is a model matrix plus a
+material. Several **parts** rather than one because a zengine instance carries a
+single material — parts are how a domain gets more than one color into its object.
+The M-theory demo uses it to open a root and show the Calabi–Yau curled up inside
+it, one part per patch of the quintic. Nothing in the framework knows that is what
+they are.
+
+### The editor — authoring the deck from inside the demo
+
+`src/plugins/editor.zig` is a plugin like any other (`O`, or `--editor` from the
+launcher), and it edits the deck the demo is playing. Two things make it cheap:
+
+- **The dropdowns are the domain's own tables.** `preset`, `color`, `filter` and
+  `edge` are names resolved against `D.presets`, `D.color_modes`, `D.filters` and
+  `D.relations` — the same lookup `slides.show()` does. A new domain therefore gets
+  a working editor with no editor code of its own.
+- **The preview is not a second path.** The editor never hands a `Slide` across the
+  thread boundary; it serializes its model to ZON and publishes the string, and the
+  render thread parses it and calls `slides.show()` — which is precisely what `F5`
+  does. Save writes those same bytes. What you previewed is what the file says.
+
+`--deck=<path>` points a demo at someone else's slides, which is what a demo
+authored in the launcher is: an existing domain, a file of your own, and a deck.
 
 ### Decks — the guided journey
 

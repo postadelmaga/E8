@@ -24,7 +24,7 @@ pub fn init(a: *App) void {
     st.rel_buf = a.gpa.alloc([]([2]u16), a.rel.len) catch return;
     st.rel_len = a.gpa.alloc(usize, a.rel.len) catch return;
     for (a.rel, 0..) |table, r| {
-        st.rel_buf[r] = a.gpa.alloc([2]u16, app_mod.n) catch return;
+        st.rel_buf[r] = a.gpa.alloc([2]u16, a.count()) catch return;
         var cnt: usize = 0;
         for (table, 0..) |j, i| {
             if (j != i) {
@@ -45,7 +45,7 @@ pub fn deinit(a: *App) void {
 
 pub fn setByName(a: *App, name: []const u8) void {
     const st = a.pluginState(@This());
-    if (std.mem.eql(u8, name, "off")) {
+    if (std.mem.eql(u8, name, "off") or std.mem.eql(u8, name, "none")) {
         st.mode = 0;
     } else if (std.mem.eql(u8, name, "selection")) {
         st.mode = 1;

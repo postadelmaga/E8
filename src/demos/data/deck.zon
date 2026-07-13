@@ -1,0 +1,54 @@
+// The tour the dataset domain gives ANY table. It names no column and no field:
+// it explains what the framework is doing to the numbers on screen. Copy it next
+// to your data and edit it (F5 hot-reloads) to turn a dataset into a paper.
+.{
+    .slides = .{
+        .{
+            .title = "Your table, as a shape",
+            .body = "Every row is a point. Its coordinates are the numeric columns, standardized — each column recentered on its mean and divided by its spread, so a column measured in kilometres does not drown one measured in millimetres.\nWhat you are orbiting is the cloud those rows make in R^k. Drag to turn it.",
+            .cite = "Standardization is the price of comparing columns; it is also what makes the next slide honest.",
+            .preset = "principal axes (PCA)",
+            .edge = "none",
+            .cam = .{ 0.65, 0.35, 4.2 },
+            .fig = "pca",
+        },
+        .{
+            .title = "The directions the data actually uses",
+            .body = "The default view is the principal plane: the axes along which the cloud varies most, found by diagonalizing the covariance. It is the projection that throws away the least.\nIt is still a shadow. Press ←/→ (or watch the animated preset) to rotate the hidden coordinates into view — if the shape changes a lot, the flat scatter you are used to was hiding structure.",
+            .cite = "Principal component analysis, Pearson 1901.",
+            .preset = "principal axes (PCA)",
+            .edge = "none",
+            .cam = .{ 1.1, 0.3, 3.8 },
+        },
+        .{
+            .title = "Raw axes, for comparison",
+            .body = "The same cloud on the first three columns as they came in the file. This is the plot most tools give you by default — useful when the axes mean something physical, misleading when they are just the columns that happened to be first.",
+            .preset = "raw axes 1-2-3",
+            .edge = "none",
+            .cam = .{ 0.4, 0.25, 4.0 },
+        },
+        .{
+            .title = "Classes",
+            .body = "If the table has a categorical column, it becomes the classes: one color and one filter each. C cycles the color modes — the classes, then a perceptual ramp per numeric column, then the hidden-depth shading. F walks the classes one at a time.\nColor is the cheapest hypothesis test there is: if the classes separate in the principal plane, a linear model will find them.",
+            .cite = "The legend at the bottom names the categories exactly as they appear in the file.",
+            .preset = "principal axes (PCA)",
+            .edge = "none",
+            .cam = .{ 0.9, 0.4, 3.6 },
+        },
+        .{
+            .title = "Neighborhoods",
+            .body = "The lines are the k-nearest-neighbor graph in the FULL space, not in the projection — so two points joined by a line but far apart on screen are telling you the projection is lying to you there.\nClick a point to open its row; N hops to its nearest neighbor. E cycles the edges: all, the selection's only, the nearest-neighbor relation, none.",
+            .cite = "Pass --knn=k on the command line to change how many neighbors each point keeps.",
+            .preset = "principal axes (PCA)",
+            .edge = "all",
+            .cam = .{ 0.65, 0.35, 3.2 },
+        },
+        .{
+            .title = "Take it away",
+            .body = "X writes dataset_view.csv: your original table with the current projection's x, y, z appended, so the view you found here goes back into your own tools.\nThis deck lives in deck.zon next to the data — write your own slides, press F5, and the dataset becomes an interactive paper.",
+            .preset = "PCA → hidden dims",
+            .edge = "none",
+            .cam = .{ 0.65, 0.35, 4.4 },
+        },
+    },
+}

@@ -15,7 +15,6 @@ const render_gpu = @import("render_gpu.zig");
 const app_mod = @import("app.zig");
 const App = app_mod.App;
 const D = app_mod.D;
-const n_pts = app_mod.n;
 
 const gpu_w = app_mod.frame_w;
 const gpu_h = app_mod.frame_h;
@@ -167,18 +166,39 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // adapts to the live window size, and is immune to compositor quirks.
     // `--gpu` opts into zengine's mesh raster (emissive spheres + bloom).
     var use_gpu = false;
+    // The iterator outlives the parse: `app_mod.cli` keeps slices into argv, and
+    // a domain that reads a file consults them all the way through startup.
+    var arg_it = try std.process.Args.Iterator.initAllocator(init.args, gpa);
+    defer arg_it.deinit();
     {
-        var arg_it = try std.process.Args.Iterator.initAllocator(init.args, gpa);
-        defer arg_it.deinit();
         _ = arg_it.skip();
-        while (arg_it.next()) |a| {
-            if (std.mem.eql(u8, std.mem.sliceTo(a, 0), "--gpu")) use_gpu = true;
+        while (arg_it.next()) |raw| {
+            const a = std.mem.sliceTo(raw, 0);
+            if (std.mem.eql(u8, a, "--gpu")) {
+                use_gpu = true;
+            } else if (std.mem.startsWith(u8, a, "--coords=")) {
+                app_mod.cli.coords = a["--coords=".len..];
+            } else if (std.mem.startsWith(u8, a, "--class=")) {
+                app_mod.cli.class = a["--class=".len..];
+            } else if (std.mem.startsWith(u8, a, "--label=")) {
+                app_mod.cli.label = a["--label=".len..];
+            } else if (std.mem.startsWith(u8, a, "--knn=")) {
+                app_mod.cli.knn = std.fmt.parseInt(u32, a["--knn=".len..], 10) catch 6;
+            } else if (std.mem.startsWith(u8, a, "--deck=")) {
+                app_mod.cli.deck = a["--deck=".len..];
+            } else if (std.mem.eql(u8, a, "--editor")) {
+                app_mod.cli.editor = true;
+            } else if (!std.mem.startsWith(u8, a, "--")) {
+                app_mod.cli.file = a;
+            }
         }
     }
 
-    // --- the point system (domain-supplied) -----------------------------------------
-    const points = D.generate();
-    const edges = try D.buildEdges(gpa, &points);
+    // --- the point system (domain-supplied: generated, or read from a file) --------
+    const points = try app_mod.loadPoints(gpa, io);
+    defer app_mod.unloadPoints(gpa, points);
+    const n_pts = points.len;
+    const edges = try D.buildEdges(gpa, points);
     defer gpa.free(edges);
     const max_instances: u32 = @intCast(n_pts + edges.len + 16);
 
@@ -191,7 +211,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         \\  Esc closes the focused layer first (popup, panel), then the app
         \\
     , .{ D.name, n_pts, edges.len, D.presets.len });
-    inline for (D.actions) |act| std.debug.print("  {s}\n", .{act.help});
+    for (D.actions) |act| std.debug.print("  {s}\n", .{act.help});
 
     // --- window --------------------------------------------------------------------
     var hud: hud_mod.Hud = .{};
@@ -263,7 +283,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
     app.gpu = gpu3d;
     app_mod.dispatchInit(&app);
 
-    var order: [n_pts]u16 = undefined; // CPU painter's order
+    const order = try gpa.alloc(u16, n_pts); // CPU painter's order
+    defer gpa.free(order);
     // GPU resize debounce: rebuild the raster once the size settles.
     var gpu_want_w: u32 = gpu_w;
     var gpu_want_h: u32 = gpu_h;
@@ -305,7 +326,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
         geom.orthonormalize(&app.basis);
 
         // --- project dim-D → 3D ------------------------------------------------------
-        for (&app.points, 0..) |*r, i| {
+        for (app.points, 0..) |*r, i| {
             const p = geom.project(&app.basis, r.v);
             app.p3[i] = p;
             const vis2 = dot3(p, p);
@@ -519,11 +540,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
             // Points back-to-front.
             for (0..n_pts) |i| order[i] = @intCast(i);
             const S = struct {
-                fn farFirst(zz: *const [n_pts][3]f32, lhs: u16, rhs: u16) bool {
+                fn farFirst(zz: [][3]f32, lhs: u16, rhs: u16) bool {
                     return zz[lhs][2] > zz[rhs][2];
                 }
             };
-            std.sort.pdq(u16, &order, &app.scr, S.farFirst);
+            std.sort.pdq(u16, order, app.scr, S.farFirst);
             for (order) |i| {
                 if (!app.vis[i]) continue;
                 const v = &app.visuals[i];

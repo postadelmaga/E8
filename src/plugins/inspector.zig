@@ -24,10 +24,51 @@ const D = app_mod.D;
 
 pub const id = "inspector";
 
-const pop_w: u32 = 460;
-const pop_h: u32 = 500;
-const scene_w: u32 = 428;
-const scene_h: u32 = 250;
+const pop_w: u32 = 620;
+const pop_h: u32 = 780;
+const scene_w: u32 = 560;
+const scene_h: u32 = 380;
+/// zrame centers a `video_fit = .native` frame in the content rect, so the scene
+/// sits in the middle and the two text bands around it are equal: the card reads
+/// centered when each band centers its own block.
+const band: i32 = (@as(i32, pop_h) - @as(i32, scene_h)) / 2;
+const pad: i32 = 22;
+
+/// Text that FITS. A domain writes its own inspect text and the framework has no
+/// say in how much of it there is — the M-theory demo spends five lines on a root
+/// and prints its ten integer coordinates — so the card cannot assume a size and
+/// hope. It measures at the preferred size and steps down until the block fits its
+/// band, which is what keeps long text inside the card instead of spilling over
+/// the scene. (The window itself cannot grow: zrame fixes its size at creation.)
+/// {point size, line height}, largest first.
+const title_steps = .{ .{ 18, 24 }, .{ 16, 21 }, .{ 14, 19 } };
+const body_steps = .{ .{ 15, 21 }, .{ 14, 19 }, .{ 13, 18 }, .{ 12, 16 } };
+
+/// Draw `txt` centered in the band [`band_top`, +`band`], at the largest of
+/// `steps` whose wrapped block fits — the smallest one if none do (a block a
+/// little tall beats a block that is not there). The type stays comptime because
+/// `drawWrapped` takes its size and style that way.
+fn drawFitted(
+    canvas: *zrame.Canvas,
+    font: anytype,
+    x: i32,
+    band_top: i32,
+    w: i32,
+    comptime steps: anytype,
+    comptime style: @TypeOf(.enum_literal),
+    color: zrame.Color,
+    txt: []const u8,
+) void {
+    const avail = band - 2 * pad;
+    inline for (steps, 0..) |s, k| {
+        const h = hud_mod.Hud.wrappedHeight(font, w, s[0], style, txt, s[1]);
+        if (h <= avail or k == steps.len - 1) {
+            const y = band_top + @divTrunc(band - h, 2) + s[0];
+            _ = hud_mod.Hud.drawWrapped(canvas, font, x, y, w, s[0], style, color, txt, s[1]);
+            return;
+        }
+    }
+}
 
 /// Text shared with the popup's window thread (its on_draw reads it).
 pub const Shared = struct {
@@ -53,13 +94,19 @@ pub const State = struct {
     instances: []ze.gpu_mesh.Instance = &.{},
     frame_no: u64 = 0,
     cpu: ?render_cpu.Cpu = null,
+    /// Scratch for the software mini-scene, one entry per point.
+    scr: [][3]f32 = &.{},
+    vis: []bool = &.{},
     shared: Shared = .{},
     last_sel: i32 = -1,
     yaw: f32 = 0.8,
 };
 
 /// Scene budget: every point as a sphere + the orbit polygon as tubes.
-const max_scene_instances: u32 = app_mod.n + 8;
+fn maxSceneInstances(a: *App) u32 {
+    const extra: usize = if (@hasDecl(D, "extra_parts")) D.extra_parts else 0;
+    return @intCast(a.count() + 8 + extra);
+}
 const point_radius: f32 = 0.045;
 const tube_radius: f32 = 0.012;
 
@@ -86,15 +133,16 @@ fn popupDraw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void
         @memcpy(body[0..bn], sh.body[0..bn]);
         sh.unlock();
     }
-    const x0: i32 = @intCast(content.x + 16);
-    const pw: i32 = @as(i32, @intCast(content.w)) - 32;
+    const x0: i32 = @as(i32, @intCast(content.x)) + pad;
+    const pw: i32 = @as(i32, @intCast(content.w)) - 2 * pad;
+    const top: i32 = @intCast(content.y);
+    // The scene lands centered in the content rect (zrame's rule); the title
+    // block centers in the band above it, the description in the band below.
+    const scene_top = top + @divTrunc(@as(i32, @intCast(content.h)) - @as(i32, scene_h), 2);
     if (tn > 0)
-        _ = hud_mod.Hud.drawWrapped(canvas, font, x0, @intCast(content.y + 26), pw, 15, .bold, zrame.Color.rgba(235, 220, 160, 0.95), title[0..tn], 20);
-    if (bn > 0) {
-        const scene_top = content.y + (content.h - scene_h) / 2;
-        const by: i32 = @intCast(scene_top + scene_h + 24);
-        _ = hud_mod.Hud.drawWrapped(canvas, font, x0, by, pw, 12, .regular, zrame.Color.rgba(200, 206, 214, 0.92), body[0..bn], 16);
-    }
+        drawFitted(canvas, font, x0, top, pw, title_steps, .bold, zrame.Color.rgba(240, 226, 170, 0.97), title[0..tn]);
+    if (bn > 0)
+        drawFitted(canvas, font, x0, scene_top + @as(i32, scene_h), pw, body_steps, .regular, zrame.Color.rgba(216, 223, 233, 0.96), body[0..bn]);
 }
 
 pub fn post(a: *App) void {
@@ -117,6 +165,8 @@ pub fn deinit(a: *App) void {
     const st = a.pluginState(@This());
     if (st.view) |v| v.destroy();
     if (st.instances.len > 0) a.gpa.free(st.instances);
+    if (st.scr.len > 0) a.gpa.free(st.scr);
+    if (st.vis.len > 0) a.gpa.free(st.vis);
     if (st.cpu) |*c| c.deinit();
 }
 
@@ -128,6 +178,14 @@ fn open(a: *App) void {
         .app_id = "dev.presenter.inspector",
         .width = pop_w,
         .height = pop_h,
+        // Nearly opaque: the main window sits right behind the popup, and a
+        // frosted-but-see-through card made the text fight the figure.
+        .style = .{ .glass = zrame.Color.rgba(15, 16, 26, 0.94), .sheen = 0.16, .specular = 0.2 },
+        // The mini-scene is a PANEL inside the card, not the card's whole content:
+        // it is presented at its native size, centered, so the two text bands
+        // around it stay glass. (A window whose content IS the render wants the
+        // default, .fill.)
+        .video_fit = .native,
         .context_menu = false,
         // Esc in this window's focus closes just the popup — the outermost
         // layer of the focused window, per the window hierarchy.
@@ -145,12 +203,12 @@ fn open(a: *App) void {
     // software raster when there is no device.
     if (st.view == null) {
         if (a.gpu) |g| {
-            st.view = g.createView(scene_w, scene_h, max_scene_instances, 0.6) catch |e| blk: {
+            st.view = g.createView(scene_w, scene_h, maxSceneInstances(a), 0.6) catch |e| blk: {
                 std.debug.print("inspector: zengine view unavailable ({s}) — software scene\n", .{@errorName(e)});
                 break :blk null;
             };
             if (st.view != null and st.instances.len == 0)
-                st.instances = a.gpa.alloc(ze.gpu_mesh.Instance, max_scene_instances) catch &.{};
+                st.instances = a.gpa.alloc(ze.gpu_mesh.Instance, maxSceneInstances(a)) catch &.{};
         }
     }
     if (st.view == null and st.cpu == null) st.cpu = .{ .gpa = a.gpa };
@@ -187,8 +245,17 @@ fn renderScene(a: *App) void {
 /// Camera for the mini-scene: a slow orbit around the system.
 fn sceneEye(st: *State, dt: f32) [3]f32 {
     st.yaw += dt * 0.5;
-    const dist: f32 = 4.2;
+    const dist: f32 = 3.8;
     return .{ dist * @cos(0.3) * @cos(st.yaw), dist * @sin(0.3), dist * @cos(0.3) * @sin(st.yaw) };
+}
+
+/// The system's own points would be black on the black scene: they wear the
+/// same glass atmosphere the main view gives its dark points.
+const atmosphere = @import("atmosphere.zig");
+const twinkle = atmosphere.twinkle;
+
+fn glassTint(base: [3]f32, k: f32) [3]f32 {
+    return atmosphere.glassTint(base, 0.7, k);
 }
 
 /// The orbit of the selection under the domain's first relation.
@@ -215,7 +282,7 @@ fn renderSceneGpu(a: *App) void {
 
     var count: usize = 0;
     const terr = 2.0 * 4.2 * std.math.tan(0.4) / @as(f32, @floatFromInt(scene_h)) * 1.5;
-    for (0..app_mod.n) |i| {
+    for (0..a.count()) |i| {
         var is_orbit = false;
         for (orbit) |o| {
             if (o == i) is_orbit = true;
@@ -223,7 +290,7 @@ fn renderSceneGpu(a: *App) void {
         const d = a.objectOf(i);
         var c: [3]f32 = undefined;
         var rad: f32 = point_radius;
-        var glow: f32 = 0.05; // the rest of the system: barely lit context
+        var glow: f32 = 0.05;
         if (is_orbit) {
             const k = 0.55 + 0.75 * @max(0.0, @sin(a.anim * 2.6 - d.orbit_phase));
             c = d.orbit_rgb;
@@ -231,8 +298,10 @@ fn renderSceneGpu(a: *App) void {
             glow = 1.4 + 2.4 * k;
             if (i == sel) glow += 1.2;
         } else {
-            c = D.color_modes[0].color(&a.points[i], 0);
-            for (&c) |*x| x.* *= 0.5;
+            const k = twinkle(a.anim, i);
+            c = glassTint(D.color_modes[0].color(&a.points[i], 0), k);
+            rad = point_radius * (0.85 + 0.3 * k);
+            glow = 0.30 + 0.55 * k;
         }
         st.instances[count] = .{
             .model = .{
@@ -286,6 +355,28 @@ fn renderSceneGpu(a: *App) void {
         count += 1;
     }
 
+    // The domain's own mesh, if it has one to show. The framework places nothing
+    // and colors nothing here — it just makes room for the science's own object.
+    // (For the M-theory demo this is the Calabi–Yau the selected root is curled
+    // up inside; the framework does not know that, and does not need to.)
+    if (comptime @hasDecl(D, "sceneExtra")) {
+        for (g.extra_ranges, 0..) |range, part| {
+            const x = D.sceneExtra(a, sel, part) orelse continue;
+            st.instances[count] = .{
+                .model = x.model,
+                .target_error = terr,
+                .ref_range = range,
+                .material = .{
+                    .base_color = x.base_color,
+                    .emissive = x.emissive,
+                    .roughness = x.roughness,
+                    .metallic = x.metallic,
+                },
+            };
+            count += 1;
+        }
+    }
+
     const proj = perspective(0.8, @as(f32, @floatFromInt(scene_w)) / @as(f32, @floatFromInt(scene_h)), 0.1, 100.0);
     const view_proj = matMul(proj, lookAt(eye, .{ 0, 0, 0 }, .{ 0, 1, 0 }));
     const img = &v.imgs[st.frame_no & 1];
@@ -295,7 +386,7 @@ fn renderSceneGpu(a: *App) void {
         .resident_pages = g.total_pages,
         .eye = eye,
         .sun_dir = .{ 0.4, 0.8, 0.45 },
-        .clear_color = .{ 0.031, 0.036, 0.062, 1.0 },
+        .clear_color = .{ 0, 0, 0, 1.0 },
         .shadows = false,
         .z_near = 0.1,
         .z_far = 100.0,
@@ -329,6 +420,12 @@ fn renderSceneCpu(a: *App) void {
     const cpu = &st.cpu.?;
     cpu.ensure(scene_w, scene_h) catch return;
     cpu.clear();
+    if (st.scr.len != a.count()) {
+        if (st.scr.len > 0) a.gpa.free(st.scr);
+        if (st.vis.len > 0) a.gpa.free(st.vis);
+        st.scr = a.gpa.alloc([3]f32, a.count()) catch return;
+        st.vis = a.gpa.alloc(bool, a.count()) catch return;
+    }
     const eye = sceneEye(st, a.dt);
     const fwd = norm(.{ -eye[0], -eye[1], -eye[2] });
     const right = norm(cross(fwd, .{ 0, 1, 0 }));
@@ -336,8 +433,8 @@ fn renderSceneCpu(a: *App) void {
     const focal = @as(f32, @floatFromInt(scene_h)) * 0.5 / std.math.tan(0.4);
     const cx = @as(f32, @floatFromInt(scene_w)) * 0.5;
     const cy = @as(f32, @floatFromInt(scene_h)) * 0.5;
-    var scr: [app_mod.n][3]f32 = undefined;
-    var vis: [app_mod.n]bool = undefined;
+    const scr = st.scr;
+    const vis = st.vis;
     for (a.p3, 0..) |p, i| {
         const rel = [3]f32{ p[0] - eye[0], p[1] - eye[1], p[2] - eye[2] };
         const vz = dot(rel, fwd);
@@ -367,7 +464,7 @@ fn renderSceneCpu(a: *App) void {
     }
     var no_threads: [0]std.Thread = .{};
     cpu.drawEdges(jobs[0..nj], &no_threads);
-    for (0..app_mod.n) |i| {
+    for (0..a.count()) |i| {
         if (!vis[i]) continue;
         const rad = std.math.clamp(0.035 * focal / scr[i][2], 1.0, 9.0);
         var is_orbit = false;
@@ -380,8 +477,10 @@ fn renderSceneCpu(a: *App) void {
             cpu.disc(scr[i][0], scr[i][1], rad * 1.6, gc, 1.3);
             if (i == sel) cpu.ring(scr[i][0], scr[i][1], rad * 1.6 + 4.0, .{ 1, 1, 1 });
         } else {
-            const c = D.color_modes[0].color(&a.points[i], 0);
-            cpu.disc(scr[i][0], scr[i][1], rad * 0.6, .{ c[0] * 0.35, c[1] * 0.35, c[2] * 0.35 }, 1.0);
+            const k = twinkle(a.anim, i);
+            const c = glassTint(D.color_modes[0].color(&a.points[i], 0), k);
+            cpu.halo(scr[i][0], scr[i][1], rad * 2.4 + 3.0, c, 10.0 * k);
+            cpu.disc(scr[i][0], scr[i][1], rad * 0.7, c, 0.7 + 0.5 * k);
         }
     }
     w.presentRgba(scene_w, scene_h, cpu.fb);

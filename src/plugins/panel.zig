@@ -20,14 +20,18 @@ pub fn init(a: *App) void {
     D.story(a);
 }
 
-/// Open or close the side panel — the window widens/narrows to make room.
+/// Open or close the side panel — the window widens/narrows to make room. The
+/// window keeps the panel's width as a gutter on the right, so the figure stays
+/// centered in what is left instead of leaving a dead band of glass on the left.
 pub fn setOpen(a: *App, on: bool) void {
     const st = a.pluginState(@This());
     if (st.on == on) return;
     st.on = on;
     a.hud.panel_on.store(on, .monotonic);
-    a.reserve_w = if (on) 2 * panel_px else 0;
-    const extra: u32 = if (on) 2 * panel_px else 0;
+    const extra: u32 = if (on) panel_px else 0;
+    a.reserve_w = extra;
+    a.hud.gutter.store(extra, .monotonic);
+    a.win.reserveGutter(extra);
     a.win.requestResize(app_mod.win_w + extra, app_mod.win_h);
 }
 

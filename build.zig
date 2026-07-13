@@ -100,41 +100,99 @@ pub fn build(b: *std.Build) void {
         zengine_mod.addAnonymousImport(s.import, .{ .root_source_file = spv });
     }
 
-    // Which domain package drives the presenter (src/demos/<demo>/domain.zig).
-    const demo = b.option([]const u8, "demo", "Demo/domain to build: lisi, molecule, polytope") orelse "lisi";
-    const build_opts = b.addOptions();
-    build_opts.addOption([]const u8, "demo", demo);
+    // ONE EXECUTABLE PER DEMO.
+    //
+    // The domain is a comptime seam (src/domain.zig): a demo's `Point` type and its
+    // `dim` are baked into the binary — `geom.Vec = [dim]f32` — so a single process
+    // cannot switch demo. It does not need to: the launcher (e8-menu, below) is a
+    // separate program that SPAWNS the one the user picked. Every demo is therefore
+    // its own executable, `e8-<name>`, differing only in the `build_options.demo`
+    // string. The heavy modules — zengine, zrame, the compiled shaders — are shared,
+    // so what is repeated is src/main.zig and the plugins, not the engine.
+    const demos = [_][]const u8{
+        "lisi",     "mtheory", "polytope", "molecule", "data",
+        "embed",    "chem",    "graph",    "astro",
+    };
 
-    const exe = b.addExecutable(.{
-        .name = "e8-explorer",
-        .use_llvm = true, // match zengine: 0.16 self-hosted backend miscompile in extern calls
+    const zrame_mod = zrame_dep.module("zrame");
+
+    var exes: [demos.len]*std.Build.Step.Compile = undefined;
+    for (demos, 0..) |name, i| {
+        const opt = b.addOptions();
+        opt.addOption([]const u8, "demo", name);
+        exes[i] = b.addExecutable(.{
+            .name = b.fmt("e8-{s}", .{name}),
+            .use_llvm = true, // match zengine: 0.16 self-hosted backend miscompile in extern calls
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zengine", .module = zengine_mod },
+                    .{ .name = "zrame", .module = zrame_mod },
+                    .{ .name = "build_options", .module = opt.createModule() },
+                },
+            }),
+        });
+        b.installArtifact(exes[i]);
+    }
+
+    // The launcher: pick a demo, or author a new one. It has NO domain — it never
+    // imports app.zig or domain.zig — so it pays none of the comptime seam, and it
+    // does not link zengine either: it is a window, a list and a process spawner.
+    // The one piece of the demo it does share: the ZON writer. The launcher writes a
+    // deck.zon and a manifest.zon with the author's own name in them, and escaping a
+    // string literal is not a thing to have two opinions about. `deck_write` is
+    // std-only, so importing it costs the launcher nothing.
+    const deck_write_mod = b.createModule(.{
+        .root_source_file = b.path("src/deck_write.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const menu = b.addExecutable(.{
+        .name = "e8-menu",
+        .use_llvm = true,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("src/menu/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "zengine", .module = zengine_mod },
-                .{ .name = "zrame", .module = zrame_dep.module("zrame") },
-                .{ .name = "build_options", .module = build_opts.createModule() },
+                .{ .name = "zrame", .module = zrame_mod },
+                .{ .name = "deck_write", .module = deck_write_mod },
             },
         }),
     });
-    b.installArtifact(exe);
+    b.installArtifact(menu);
 
-    const run_cmd = b.addRunArtifact(exe);
-    if (b.args) |a| run_cmd.addArgs(a);
-    const run_step = b.step("run", "Run the E8 explorer");
-    run_step.dependOn(&run_cmd.step);
+    // `zig build run` opens the launcher — the way in for someone who is not
+    // holding a build command.
+    const run_menu = b.addRunArtifact(menu);
+    if (b.args) |a| run_menu.addArgs(a);
+    const run_step = b.step("run", "Open the launcher (pick a demo, or author one)");
+    run_step.dependOn(&run_menu.step);
+
+    // `zig build run-demo -Ddemo=mtheory -- --gpu` runs ONE demo straight, which is
+    // the tighter loop while developing a domain.
+    const demo = b.option([]const u8, "demo", "Demo to run with `run-demo`: lisi, mtheory, molecule, polytope, data (any CSV/TSV), embed (.npy/CSV embeddings), chem (PDB/XYZ), graph (GraphML/edge list), astro (star catalogs)") orelse "lisi";
+    const run_one = b.step("run-demo", "Run one demo directly (-Ddemo=<name>)");
+    for (demos, 0..) |name, i| {
+        if (!std.mem.eql(u8, name, demo)) continue;
+        const rc = b.addRunArtifact(exes[i]);
+        if (b.args) |a| rc.addArgs(a);
+        run_one.dependOn(&rc.step);
+    }
 
     // Tests: the root-system math is exact Lie theory — every invariant is checked.
+    // E8 (Lisi's 240 roots) and E10 (the M-theory demo: the Lorentzian lattice,
+    // the Dynkin diagram recovered from the simple roots, the BKL billiard).
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/demos/lisi/e8.zig"),
+            .root_source_file = b.path("src/tests.zig"),
             .target = target,
             .optimize = .Debug,
         }),
     });
-    const run_tests = b.addRunArtifact(tests);
-    const test_step = b.step("test", "Run the E8 root-system unit tests");
-    test_step.dependOn(&run_tests.step);
+    const test_step = b.step("test", "Run the root-system unit tests (E8 and E10)");
+    test_step.dependOn(&b.addRunArtifact(tests).step);
 }

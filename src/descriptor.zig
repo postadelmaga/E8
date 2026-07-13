@@ -28,3 +28,31 @@ pub const Object = struct {
     orbit_rgb: [3]f32 = .{ 1, 1, 1 },
     orbit_phase: f32 = 0,
 };
+
+/// A domain's OWN mesh, attached to the inspector's zengine scene.
+///
+/// The framework bakes two meshes and knows what they are for (a sphere per
+/// point, a tube per edge). Anything beyond that is the science's business, so a
+/// domain may hand over meshes of its own — `extraMeshes(gpa)` builds them,
+/// `sceneExtra(a, i, part)` places and lights each one per selected point.
+///
+/// Several PARTS rather than one, because a zengine instance carries a single
+/// material: parts are how a domain gets more than one colour into its object.
+/// The M-theory demo hands over the twenty-five patches of a Calabi–Yau, one per
+/// root of unity, so each can be lit its own hue. Nothing in the framework knows
+/// that is what they are.
+pub const Extra = struct {
+    /// Column-major 4×4 model matrix.
+    model: [16]f32,
+    base_color: [3]f32,
+    emissive: [3]f32,
+    roughness: f32 = 0.42,
+    metallic: f32 = 0.0,
+};
+
+/// Interleaved vertices — position(3), normal(3), uv(2) — plus triangle indices.
+/// What a domain's `extraMesh(gpa)` returns; the framework owns the memory after.
+pub const MeshData = struct {
+    verts: []f32,
+    idx: []u32,
+};

@@ -1,0 +1,50 @@
+// The tour of an embedding. It names no dataset: it explains the two views and
+// where each one lies. Copy it next to your vectors and edit it (F5 reloads).
+.{
+    .slides = .{
+        .{
+            .title = "Two views of the same vectors",
+            .body = "Every point is one of your vectors. It carries BOTH reductions at once: its first coordinates are the principal components, its last three are the t-SNE embedding. Keys 1..4 change which of them the camera looks along — nothing is recomputed, so the point you selected stays selected across the switch.\nStart on the principal axes: the linear shadow, where distances still mean what you think they mean.",
+            .cite = "Hotelling 1933 (PCA); van der Maaten & Hinton 2008 (t-SNE).",
+            .preset = "PCA 1-2-3",
+            .color = "k-means clusters",
+            .edge = "none",
+            .cam = .{ 0.65, 0.35, 4.2 },
+            .fig = "map",
+        },
+        .{
+            .title = "t-SNE: clusters you can trust, distances you cannot",
+            .body = "Now the same points on their t-SNE axes. The neighborhoods are preserved by construction — that is what the algorithm optimizes — but the SPACE BETWEEN clusters is meaningless: sizes, gaps and orientations are artifacts of the optimization, not facts about your data.\nRead the clusters. Do not measure the gaps.",
+            .cite = "Wattenberg, Viégas & Johnson, 'How to Use t-SNE Effectively', Distill 2016.",
+            .preset = "t-SNE (3D)",
+            .color = "k-means clusters",
+            .edge = "none",
+            .cam = .{ 0.9, 0.3, 3.6 },
+        },
+        .{
+            .title = "Where the projection lies",
+            .body = "The lines are the k-nearest-neighbor graph computed by cosine in the FULL space — never in the picture you are looking at. So a long line is an honest confession: those two vectors are neighbors, and the projection has pulled them apart.\nClick a point to see its five nearest neighbors with their cosine similarities. N hops along the chain.",
+            .cite = "Pass --knn=k to change how many neighbors each vector keeps.",
+            .preset = "t-SNE (3D)",
+            .edge = "all",
+            .cam = .{ 0.65, 0.35, 3.2 },
+        },
+        .{
+            .title = "Does the embedding know your labels?",
+            .body = "Color by 'neighbor agreement' (C): green when a vector's nearest neighbor shares its label, red when it does not. That green fraction is 1-NN accuracy — the cheapest, least deniable measure of whether the embedding encoded what you think it encoded.\nRed patches are where your classifier will fail. Look at them before you train it.",
+            .cite = "1-NN accuracy in the embedding space is the standard sanity check for representation quality.",
+            .preset = "t-SNE (3D)",
+            .color = "neighbor agreement",
+            .edge = "none",
+            .cam = .{ 0.8, 0.4, 3.4 },
+        },
+        .{
+            .title = "The components underneath",
+            .body = "Back to the linear view — but rotating: the animated preset turns the principal plane through the deeper components. If the cloud keeps reshuffling, PC1–PC2 (the scatter everyone publishes) was hiding structure.\nX exports labels, clusters, neighbors, cosines and the t-SNE coordinates as a CSV, so what you found here goes back into your own pipeline.",
+            .preset = "PCA → deeper components",
+            .color = "k-means clusters",
+            .edge = "none",
+            .cam = .{ 0.65, 0.35, 4.4 },
+        },
+    },
+}

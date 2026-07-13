@@ -1,0 +1,49 @@
+// The tour of a star catalog. Copy it next to your CSV and edit it (F5 reloads).
+.{
+    .slides = .{
+        .{
+            .title = "A catalog is a place",
+            .body = "Right ascension and declination point; the parallax measures. Together they put every row where it actually is: d = 1000/π parsecs, the observer at the origin. What was a table of angles is now a neighborhood, and you are standing in the middle of it.\nColors are the stars' own: the color index run through the blackbody sequence. Blue is hot, red is cool, and the yellow-white ones are the Sun's kind.",
+            .cite = "Parallax distances: Gaia DR3. Negative parallaxes are noise and were dropped, not mirrored.",
+            .preset = "equatorial (RA/Dec)",
+            .color = "stellar color",
+            .edge = "none",
+            .cam = .{ 0.65, 0.35, 4.2 },
+            .fig = "hr",
+        },
+        .{
+            .title = "The diagram that explained the stars",
+            .body = "The figure below is the Hertzsprung–Russell diagram, drawn live from these rows: color index across, absolute magnitude up. The diagonal band is the main sequence — stars fusing hydrogen, where a star spends 90% of its life. Above it sit the giants; below and left, the white dwarfs.\nNothing was fitted. The band is just what the catalog does when you plot it honestly.",
+            .cite = "Hertzsprung 1911; Russell 1913.",
+            .preset = "equatorial (RA/Dec)",
+            .color = "luminosity",
+            .edge = "none",
+            .cam = .{ 1.0, 0.3, 3.8 },
+            .fig = "hr",
+        },
+        .{
+            .title = "Turn into the galaxy",
+            .body = "Switch to the galactic frame (preset 2): the same stars, rotated into the plane of the Milky Way. The disc lines up, and the crowding along it stops being an artifact of the sky's coordinates and becomes the structure we live inside.\nThat is the whole argument for orbiting data instead of plotting it: the same numbers, a frame that means something, and a fact you could not see before.",
+            .preset = "galactic plane",
+            .color = "stellar color",
+            .edge = "none",
+            .cam = .{ 0.2, 0.15, 3.6 },
+        },
+        .{
+            .title = "The near and the bright are not the same stars",
+            .body = "F filters: naked-eye stars (m ≤ 6) — the sky humans named — then the ones within 25 parsecs. They are almost disjoint sets. The stars we see are the luminous ones far away; the stars around us are dim red dwarfs nobody ever gave a name.\nThis is selection bias you can look at from the side.",
+            .preset = "galactic plane",
+            .color = "distance",
+            .edge = "none",
+            .cam = .{ 0.7, 0.4, 3.2 },
+        },
+        .{
+            .title = "Neighbors",
+            .body = "The lines join each star to its nearest neighbor in three dimensions — not on the sky, where two stars a thousand parsecs apart can look like a pair.\nClick a star for its distance, magnitudes, temperature and its nearest neighbor; N jumps to it. X exports the catalog in cartesian parsecs.",
+            .preset = "drift",
+            .color = "stellar color",
+            .edge = "all",
+            .cam = .{ 0.65, 0.35, 2.8 },
+        },
+    },
+}

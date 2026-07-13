@@ -35,9 +35,11 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/slides.zig"),
+    @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
     @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
+    @import("../../plugins/atmosphere.zig"),
 };
 
 pub const Element = enum(u8) { c, n, o };
@@ -276,7 +278,7 @@ pub fn inspect(a: *App, i: usize, tbuf: *[96]u8, bbuf: *[512]u8) InspectText {
 pub fn figure(a: *App, fig_id: []const u8, dots: []hud_mod.FigDot) usize {
     if (!std.mem.eql(u8, fig_id, "skeleton")) return 0;
     var n_dots: usize = 0;
-    for (&a.points) |*p| {
+    for (a.points) |*p| {
         const c = cpk(p.el);
         dots[n_dots] = .{ .x = p.v[0] / 3.0, .y = p.v[1] / 3.0, .rgb = .{
             @intFromFloat(std.math.clamp(c[0] + 0.35, 0, 1) * 255),
@@ -294,7 +296,7 @@ pub fn exportCsv(a: *App) !void {
     errdefer out.deinit(a.gpa);
     try out.appendSlice(a.gpa, "index,element,core,x,y,z\n");
     var buf: [128]u8 = undefined;
-    for (&a.points, 0..) |*p, i| {
+    for (a.points, 0..) |*p, i| {
         const line = try std.fmt.bufPrint(&buf, "{d},{s},{},{d},{d},{d}\n", .{
             i, elName(p.el), p.core, p.v[0], p.v[1], p.v[2],
         });

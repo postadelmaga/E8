@@ -33,9 +33,18 @@ pub const State = struct {
     cam_t: f32 = 1,
 };
 
+/// The deck this run plays. `--deck=<path>` overrides the domain's own, because a
+/// demo AUTHORED by the user is precisely that: someone else's slides over a
+/// domain that already exists. Without the override the path would be a fixed name
+/// relative to the working directory, and the launcher — which runs from one cwd
+/// for every demo — would hot-reload the wrong file.
+pub fn deckPath() []const u8 {
+    return if (app_mod.cli.deck.len > 0) app_mod.cli.deck else D.deck_path;
+}
+
 pub fn init(a: *App) void {
     const st = a.pluginState(@This());
-    st.deck = deck_mod.load(a.gpa, a.io, D.deck_path, D.deck_default);
+    st.deck = deck_mod.load(a.gpa, a.io, deckPath(), D.deck_default);
 }
 
 pub fn deinit(a: *App) void {
@@ -67,7 +76,7 @@ pub fn key(a: *App, code: u32) bool {
         },
         63 => { // F5: hot-reload the deck while authoring
             deck_mod.deinit(a.gpa, st.deck);
-            st.deck = deck_mod.load(a.gpa, a.io, D.deck_path, D.deck_default);
+            st.deck = deck_mod.load(a.gpa, a.io, deckPath(), D.deck_default);
             st.idx = @min(st.idx, st.deck.slides.len -| 1);
             if (a.pluginState(panel).on and st.deck.slides.len > 0) show(a, st.idx);
             return true;
@@ -121,7 +130,10 @@ pub fn status(a: *App, buf: []u8) []const u8 {
     return if (a.pluginState(@This()).auto) "kiosk (K stops)" else "";
 }
 
-fn show(a: *App, idx: usize) void {
+/// Apply a slide: projection, camera, colors, edges, filter, panel text, figure.
+/// Public because the EDITOR previews with it — the preview is not a second
+/// rendering path, it is this one.
+pub fn show(a: *App, idx: usize) void {
     const st = a.pluginState(@This());
     const s = &st.deck.slides[idx];
     st.auto_t = 0;
@@ -145,7 +157,7 @@ fn show(a: *App, idx: usize) void {
     }
     a.pluginState(projections).tumble = s.tumble;
     if (s.color.len > 0) colors.setByName(a, s.color);
-    edges.setByName(a, s.edge);
+    edges.setByName(a, if (s.edge.len > 0) s.edge else "all");
     if (s.filter.len > 0) filters.setByName(a, s.filter);
     var tbuf: [96]u8 = undefined;
     const title = std.fmt.bufPrint(&tbuf, "{d}/{d} — {s}", .{ idx + 1, st.deck.slides.len, s.title }) catch s.title;

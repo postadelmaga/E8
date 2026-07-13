@@ -46,6 +46,10 @@ pub const Hud = struct {
     frame_h: std.atomic.Value(u32) = .init(0),
     /// Side panel visibility (render thread writes, window thread reads).
     panel_on: std.atomic.Value(bool) = .init(false),
+    /// Width the window keeps for the panel on the right of the content (the
+    /// same gutter it was handed via `reserveGutter`): the frame centers in the
+    /// content MINUS this, so the panel band starts where the frame ends.
+    gutter: std.atomic.Value(u32) = .init(0),
     ms_bits: std.atomic.Value(u32) = .init(0),
     last_ns: i128 = 0,
     ema_ms: f32 = 0,
@@ -74,7 +78,16 @@ pub const Hud = struct {
         self.ms_bits.store(@bitCast(self.ema_ms), .monotonic);
     }
 
+    /// Every HUD write lands OUTSIDE the presented frame (status lines above it,
+    /// the panel beside it, the legend below): a staged frame only damages the
+    /// frame's own rect, so the window has to be told the overlay changed or the
+    /// text freezes on its last full paint while the figure keeps moving.
+    fn dirty(self: *Hud) void {
+        if (self.win) |w| w.invalidate();
+    }
+
     pub fn setLine1(self: *Hud, s: []const u8) void {
+        defer self.dirty();
         self.lock.lock();
         defer self.lock.unlock();
         const n = @min(s.len, self.line1.len);
@@ -83,6 +96,7 @@ pub const Hud = struct {
     }
 
     pub fn setLine2(self: *Hud, s: []const u8) void {
+        defer self.dirty();
         self.lock.lock();
         defer self.lock.unlock();
         const n = @min(s.len, self.line2.len);
@@ -93,6 +107,7 @@ pub const Hud = struct {
     /// Side-panel content: title, body (paragraphs split on '\n', word-wrapped
     /// at draw time), and the paper citations drawn dimmer underneath.
     pub fn setPanel(self: *Hud, title: []const u8, body: []const u8, cite: []const u8) void {
+        defer self.dirty();
         self.lock.lock();
         defer self.lock.unlock();
         self.p_title_len = @min(title.len, self.p_title.len);
@@ -107,6 +122,7 @@ pub const Hud = struct {
     /// Inline 2D diagram drawn under the panel citation (weight diagrams,
     /// root projections). Call after `setPanel`.
     pub fn setPanelFigure(self: *Hud, dots: []const FigDot) void {
+        defer self.dirty();
         self.lock.lock();
         defer self.lock.unlock();
         self.p_fig_len = @min(dots.len, self.p_fig.len);
@@ -116,6 +132,7 @@ pub const Hud = struct {
     pub const LegendIn = struct { rgb: [3]u8, label: []const u8 };
 
     pub fn setLegend(self: *Hud, items: []const LegendIn) void {
+        defer self.dirty();
         self.lock.lock();
         defer self.lock.unlock();
         self.n_legend = @min(items.len, self.legend.len);
@@ -126,10 +143,24 @@ pub const Hud = struct {
         }
     }
 
+    /// Height the wrapped `txt` would take — the same walk as `drawWrapped`
+    /// with nothing painted, so a caller can lay a block out before drawing it.
+    pub fn wrappedHeight(
+        font: anytype,
+        w: i32,
+        comptime size: comptime_int,
+        comptime style: @TypeOf(.enum_literal),
+        txt: []const u8,
+        line_h: i32,
+    ) i32 {
+        return drawWrapped(null, font, 0, 0, w, size, style, zrame.Color.rgba(0, 0, 0, 0), txt, line_h);
+    }
+
     /// Draw `txt` word-wrapped in a column `w` px wide starting at baseline
     /// `y0`; paragraphs split on '\n'. Returns the baseline after the last line.
+    /// A null canvas measures without painting (see `wrappedHeight`).
     pub fn drawWrapped(
-        canvas: *zrame.Canvas,
+        canvas: ?*zrame.Canvas,
         font: anytype,
         x: i32,
         y0: i32,
@@ -161,7 +192,7 @@ pub const Hud = struct {
                 if (font.measure(size, style, para[line_start.?..we]) <= w) {
                     line_end = we;
                 } else {
-                    canvas.drawText(font, x, y, para[line_start.?..line_end], .{
+                    if (canvas) |c| c.drawText(font, x, y, para[line_start.?..line_end], .{
                         .size = size,
                         .style = style,
                         .color = color,
@@ -172,7 +203,7 @@ pub const Hud = struct {
                 }
             }
             if (line_start) |ls| {
-                canvas.drawText(font, x, y, para[ls..line_end], .{
+                if (canvas) |c| c.drawText(font, x, y, para[ls..line_end], .{
                     .size = size,
                     .style = style,
                     .color = color,
@@ -252,8 +283,10 @@ pub const Hud = struct {
         // Side panel: the glass band to the right of the centered video frame
         // (same centering math as chrome.frameOrigin).
         if (self.panel_on.load(.monotonic) and npt > 0) {
-            const fw = @min(self.frame_w.load(.monotonic), content.w);
-            const ox = content.x + (content.w - fw) / 2;
+            const gut = @min(self.gutter.load(.monotonic), content.w);
+            const area_w = content.w - gut;
+            const fw = @min(self.frame_w.load(.monotonic), area_w);
+            const ox = content.x + (area_w - fw) / 2;
             const px: i32 = @intCast(ox + fw + 16);
             const pw: i32 = @as(i32, @intCast(content.x + content.w)) -| px - 14;
             if (pw >= 140) {

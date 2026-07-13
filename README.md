@@ -136,12 +136,45 @@ interactive scientific papers on zengine/zrame, and its reference consumer —
 this reading of Lisi's E8 papers. The core (`src/main.zig`) owns only the
 window, camera, projection and rasterizers; features are plugins
 (`src/plugins/`), and the science lives in a domain package
-(`src/demos/<name>/`). Two more domains ship as proof:
+(`src/demos/<name>/`). Three more domains ship as proof:
 
 ```sh
+zig build -Ddemo=mtheory run    # E10: where Lisi's E8 goes next (see below)
 zig build -Ddemo=molecule run   # caffeine: ball-and-stick, purine-core tour
 zig build -Ddemo=polytope run   # the 24-cell: three 16-cells, isoclinic rotation
 ```
+
+### The M-theory demo
+
+`-Ddemo=mtheory` is the framework's answer to "what comes after E8?", and the
+first domain built ON another: Lisi's 240 roots are found *inside* E10 — the same
+roots, with every inner product between every pair preserved (the tests check all
+57 600 of them).
+
+Adjoin two nodes to E8's Dynkin diagram and you get **E10** — infinite-
+dimensional and hyperbolic, with a Lorentzian metric that has a light cone. The
+roots are the norm-2 vectors of the lattice `{ w ∈ ℤ¹⁰ : Σwₐ ≡ 0 mod 3 }`, and
+they are graded by **level** `ℓ = Σwₐ/3`. That grading is the whole point:
+
+| level | roots | | |
+|---|---|---|---|
+| ℓ = 0 | 90 | `sl(10)` | the **metric** — gravity |
+| ℓ = ±1 | 120 | `C(10,3)` = a 3-form | what an **M2-brane** carries |
+| ℓ = ±2 | 210 | `C(10,6)` = a 6-form | what an **M5-brane** carries |
+| ℓ = ±3 | 360 | | the **dual graviton** — not in the supergravity Lagrangian |
+
+Those counts are not hard-coded. They come out of solving `Σw = 3ℓ` and
+`Σw² = 2 + ℓ²`, and the unit tests assert them. *Nobody put branes into E10; they
+fall out of counting its roots.*
+
+| key | |
+|---|---|
+| `−` / `+` | the level. The slider does not zoom — it unveils M-theory's field content one field at a time. |
+| `G` | the **3-form ladder**. The tenth simple root is the only one that changes the level, so climbing it walks metric → M2 → M5 → dual graviton. |
+| `B` | **the Big Bang.** The ten scale factors of eleven-dimensional supergravity bounce off the walls of E10's Weyl chamber (Damour–Henneaux–Nicolai) — and the walls *are* these same ten simple roots, in these same coordinates. The projection is sheared by the *live* Kasner exponents, so the figure is stretched and crushed by the actual geometry of space. Each bounce lights the roots the wall is: blue for gravity's nine symmetry walls (level 0), gold for the electric wall (level ±1 — the M2-brane's own roots). Lisi's particles fade to black as the classical sector switches off. |
+
+The same billiard drives the Big Bang prologue of zengine's `big_bang` and
+`genesis` animations (`zsim.cosmo`).
 
 See **[FRAMEWORK.md](FRAMEWORK.md)** for the hook contract, the object-descriptor
 API, the ZON deck format, and a tutorial for authoring your own interactive
@@ -150,13 +183,72 @@ paper.
 ## Build & run
 
 ```sh
+zig build         # builds one executable PER DEMO (e8-lisi, e8-mtheory, …) plus e8-menu
+zig build run     # opens the LAUNCHER: pick a demo, or author a new one
 zig build test    # root-system invariants: 240/56/6720, Table 9 class census,
                   # 3×64 generations, triality order 3 + I→II→III cycle,
-                  # Coxeter element order 30, Petrie plane rotation = 12°
-zig build run     # software renderer (default): multithreaded additive raster,
-                  # follows the live window size
-zig build run -- --gpu   # zengine mesh raster: emissive spheres + edge tubes,
-                         # HDR bloom, dmabuf zero-copy (writes e8-scene.gpak)
+                  # Coxeter element order 30, Petrie plane rotation = 12°;
+                  # plus the deck serializer's round trip and the SDF→XYZ converter
+
+# one demo, straight, while developing it:
+zig build run-demo -Ddemo=mtheory -- --gpu
+```
+
+There is one executable per demo because there has to be. A demo's point type and
+its dimension are **comptime** — `geom.Vec = [dim]f32` — so `lisi` in 8D and
+`chem` in 3D are genuinely different programs. The launcher has no domain at all:
+it is a window, a list, and `std.process.Child`.
+
+## The launcher and the editor
+
+`zig build run` opens a menu with three tabs.
+
+**Demo** — the nine built-in ones. Each can be opened normally, or **in the
+editor**, which is how you read how a deck is made: the slides you are looking at
+are the ones in the list.
+
+**Le mie demo** — what you have authored, scanned from `demos-user/`.
+
+**Nuova demo** — a wizard. Pick a category, give it data, name it. A demo you make
+is nothing but a directory:
+
+```
+demos-user/mia-proteina/
+  manifest.zon    .{ .name = "…", .domain = "chem", .asset = "1ubq.pdb" }
+  1ubq.pdb        the data
+  deck.zon        the slides
+```
+
+Authoring is therefore not inventing a demo — it is choosing which of the domains
+that already exist should look at your data, and then writing the slides.
+
+| category | domain | asset | its specialized tool |
+|---|---|---|---|
+| Chemistry & molecular biology | `chem` | PDB, XYZ | **the online vocabulary**: a molecule by name from **PubChem** (3D conformer → XYZ), a structure by ID from **RCSB** |
+| Astronomy | `astro` | catalog CSV | the H–R diagram, blackbody color |
+| Networks & graphs | `graph` | GraphML, edge list | the Laplacian spectrum, communities |
+| Tables | `data` | CSV, TSV | principal axes, k-NN |
+| Embeddings / ML | `embed` | `.npy`, CSV | PCA ⇄ t-SNE |
+| Mathematics & physics | `lisi`, `mtheory`, … | none (points are computed) | the deck alone |
+
+The network is only ever touched by `src/menu/fetch.zig`, only when you press the
+button. No other executable in the project opens a socket.
+
+**The editor** (`O` in any demo, or `--editor`) is its own glass window beside the
+running scene — so the scene *is* the preview, and the letters you type into a
+title field never reach the demo's single-key shortcuts. The dropdowns for
+projection / color / filter / edges are the domain's own declarative tables, so a
+new domain gets a working editor for free. "Capture the camera" takes the shot you
+are looking at.
+
+It does not hand slide structs across the thread boundary: it serializes the deck
+to ZON and publishes the string. The render thread parses it — the same two calls
+`F5` makes. So the preview cannot drift from the demo, and *save* writes the very
+bytes you already previewed.
+
+```sh
+zig build run-demo -Ddemo=lisi -- --gpu   # zengine mesh raster: emissive spheres + edge
+                                          # tubes, HDR bloom, dmabuf zero-copy
 ```
 
 Requirements: Zig 0.16, Linux + Wayland with `../Zrame`, `../Zicro`,

@@ -33,9 +33,11 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/slides.zig"),
+    @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
     @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
+    @import("../../plugins/atmosphere.zig"),
 };
 
 /// One of the three inscribed 16-cells (octads), permuted by F4's triality.
@@ -300,7 +302,7 @@ pub fn figure(a: *App, fig_id: []const u8, dots: []hud_mod.FigDot) usize {
     if (!std.mem.eql(u8, fig_id, "petrie")) return 0;
     const p = petrie();
     var n_dots: usize = 0;
-    for (&a.points) |*pt| {
+    for (a.points) |*pt| {
         var x: f32 = 0;
         var y: f32 = 0;
         for (0..4) |k| {
@@ -324,7 +326,7 @@ pub fn exportCsv(a: *App) !void {
     errdefer out.deinit(a.gpa);
     try out.appendSlice(a.gpa, "index,octad,x1,x2,x3,x4,px,py,pz\n");
     var buf: [160]u8 = undefined;
-    for (&a.points, 0..) |*p, i| {
+    for (a.points, 0..) |*p, i| {
         const pr = geom.project(&a.basis, p.v);
         const line = try std.fmt.bufPrint(&buf, "{d},{s},{d},{d},{d},{d},{d:.6},{d:.6},{d:.6}\n", .{
             i, @tagName(p.octad), p.v[0], p.v[1], p.v[2], p.v[3], pr[0], pr[1], pr[2],

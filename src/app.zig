@@ -30,8 +30,55 @@ const render_gpu = @import("render_gpu.zig");
 
 /// The active domain package (see src/domain.zig).
 pub const D = domain.D;
-pub const n = domain.n;
 pub const dim = domain.dim;
+
+/// The point count is NOT comptime: a generated domain knows it up front, a
+/// loaded one (`D.load` — a file the user opened) only after reading the file.
+/// Everything downstream sizes off `App.count()`; this is only the ceiling the
+/// fixed-size scratch buffers use.
+pub const max_points: usize = 100_000;
+
+/// What the user asked for on the command line. A generated domain ignores all
+/// of it; a domain that READS A FILE (see demos/data) is configured by it. Main
+/// fills this before `loadPoints`; the slices point into the argv the process
+/// owns for its whole life.
+pub const Cli = struct {
+    /// The file to open (the first non-flag argument).
+    file: []const u8 = "",
+    /// `--coords=a,b,c` — which columns are the coordinates (names or indices).
+    coords: []const u8 = "",
+    /// `--class=col` — the column whose values become the classes.
+    class: []const u8 = "",
+    /// `--label=col` — the column that names a point in the HUD.
+    label: []const u8 = "",
+    /// `--knn=k` — neighbors per point in the graph the framework draws.
+    knn: u32 = 6,
+    /// `--deck=path` — the slide deck to play. Empty means the domain's own
+    /// (`D.deck_path`, then the embedded `D.deck_default`). A demo AUTHORED by the
+    /// user is exactly this: someone else's deck over a domain that already exists,
+    /// so the deck cannot be a fixed name relative to the working directory.
+    deck: []const u8 = "",
+    /// `--editor` — open the slide editor at startup. The launcher passes it both
+    /// when authoring a new demo and when opening an existing one as an example.
+    editor: bool = false,
+};
+pub var cli: Cli = .{};
+
+/// The point set: `D.load(gpa, io)` when the domain reads it from a file,
+/// `D.generate()` when it computes it. Caller owns the returned slice.
+pub fn loadPoints(gpa: std.mem.Allocator, io: std.Io) ![]D.Point {
+    if (comptime @hasDecl(D, "load")) return D.load(gpa, io);
+    const g = D.generate();
+    const out = try gpa.alloc(D.Point, g.len);
+    @memcpy(out, &g);
+    return out;
+}
+
+/// Release whatever a loading domain kept alongside the points (its table).
+pub fn unloadPoints(gpa: std.mem.Allocator, points: []D.Point) void {
+    if (comptime @hasDecl(D, "unload")) D.unload(gpa);
+    gpa.free(points);
+}
 
 pub const plugin_list = D.plugins;
 
@@ -177,11 +224,13 @@ pub const App = struct {
     /// it for an extra `View`. Null when Vulkan/dmabuf is unavailable.
     gpu: ?*render_gpu.Gpu3d = null,
 
-    // The point system (immutable after startup).
-    points: [n]D.Point,
+    // The point system (immutable after startup). Sized at RUNTIME: a generated
+    // domain knows its count at comptime, a loaded one (a file the user opened)
+    // only after reading it, and the framework must not care which.
+    points: []D.Point,
     edges: []const [2]u16,
     /// CSR adjacency over `edges` (degrees vary by domain).
-    nbr_off: [n + 1]u32 = undefined,
+    nbr_off: []u32 = &.{},
     nbr: []u16 = &.{},
     /// Tabulated relation partner maps, one per D.relations entry.
     rel: [][]u16 = &.{},
@@ -191,14 +240,14 @@ pub const App = struct {
     preset: u32 = 0,
     reset_camera: bool = false,
 
-    // Per-frame data.
+    // Per-frame data, one entry per point (allocated by `initTables`).
     dt: f32 = 0,
     anim: f32 = 0,
-    p3: [n][3]f32 = undefined,
-    hidden: [n]f32 = undefined,
-    scr: [n][3]f32 = undefined,
-    vis: [n]bool = undefined,
-    visuals: [n]Visual = undefined,
+    p3: [][3]f32 = &.{},
+    hidden: []f32 = &.{},
+    scr: [][3]f32 = &.{},
+    vis: []bool = &.{},
+    visuals: []Visual = &.{},
 
     // Interaction.
     selected: i32 = -1,
@@ -223,18 +272,33 @@ pub const App = struct {
         return D.descriptor(a, i);
     }
 
-    /// Build adjacency and relation tables — call once after `edges` is set.
+    /// How many points the loaded system has.
+    pub fn count(a: *const App) usize {
+        return a.points.len;
+    }
+
+    /// Allocate the per-point buffers and build the adjacency and relation
+    /// tables — call once after `points` and `edges` are set.
     pub fn initTables(a: *App) !void {
-        var deg = try a.gpa.alloc(u32, n);
+        const np = a.points.len;
+        a.p3 = try a.gpa.alloc([3]f32, np);
+        a.hidden = try a.gpa.alloc(f32, np);
+        a.scr = try a.gpa.alloc([3]f32, np);
+        a.vis = try a.gpa.alloc(bool, np);
+        a.visuals = try a.gpa.alloc(Visual, np);
+        @memset(a.vis, false);
+
+        var deg = try a.gpa.alloc(u32, np);
         defer a.gpa.free(deg);
         @memset(deg, 0);
         for (a.edges) |e| {
             deg[e[0]] += 1;
             deg[e[1]] += 1;
         }
+        a.nbr_off = try a.gpa.alloc(u32, np + 1);
         a.nbr_off[0] = 0;
-        for (0..n) |i| a.nbr_off[i + 1] = a.nbr_off[i] + deg[i];
-        a.nbr = try a.gpa.alloc(u16, a.nbr_off[n]);
+        for (0..np) |i| a.nbr_off[i + 1] = a.nbr_off[i] + deg[i];
+        a.nbr = try a.gpa.alloc(u16, a.nbr_off[np]);
         @memset(deg, 0);
         for (a.edges) |e| {
             a.nbr[a.nbr_off[e[0]] + deg[e[0]]] = e[1];
@@ -244,8 +308,8 @@ pub const App = struct {
         }
         a.rel = try a.gpa.alloc([]u16, D.relations.len);
         for (D.relations, 0..) |rd, r| {
-            a.rel[r] = try a.gpa.alloc(u16, n);
-            for (0..n) |i| a.rel[r][i] = rd.partner(&a.points, @intCast(i));
+            a.rel[r] = try a.gpa.alloc(u16, np);
+            for (0..np) |i| a.rel[r][i] = rd.partner(a.points, @intCast(i));
         }
     }
 
@@ -253,6 +317,12 @@ pub const App = struct {
         for (a.rel) |t| a.gpa.free(t);
         a.gpa.free(a.rel);
         a.gpa.free(a.nbr);
+        a.gpa.free(a.nbr_off);
+        a.gpa.free(a.visuals);
+        a.gpa.free(a.vis);
+        a.gpa.free(a.scr);
+        a.gpa.free(a.hidden);
+        a.gpa.free(a.p3);
     }
 };
 

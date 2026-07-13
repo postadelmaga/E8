@@ -9,6 +9,8 @@
 
 const std = @import("std");
 const ze = @import("zengine");
+const desc = @import("descriptor.zig");
+const D = @import("domain.zig").D;
 
 /// A second raster + export images on the SAME Vulkan device, reusing the
 /// baked sphere/tube meshes — how the inspector popup gets a zengine scene of
@@ -39,6 +41,10 @@ pub const Gpu3d = struct {
     /// [start, end) slices of `refs` for each of the two meshes.
     sphere_range: [2]u32,
     tube_range: [2]u32,
+    /// The domain's own meshes, when it declares any (`D.extraMeshes`). The
+    /// framework bakes them next to the sphere and the tube and never asks what
+    /// they are.
+    extra_ranges: [][2]u32 = &.{},
     total_pages: u32,
     /// The archive pages, kept resident so every view can upload them.
     page_bytes: [][]u8,
@@ -46,6 +52,7 @@ pub const Gpu3d = struct {
     /// Destroy every `View` first.
     pub fn destroy(self: *Gpu3d) void {
         const gpa = self.gpa;
+        if (self.extra_ranges.len > 0) gpa.free(self.extra_ranges);
         self.gpu.deinit();
         for (self.page_bytes) |b| gpa.free(b);
         gpa.free(self.page_bytes);
@@ -94,6 +101,7 @@ pub const Gpu3d = struct {
 
         var sphere_range: [2]u32 = undefined;
         var tube_range: [2]u32 = undefined;
+        var extra_ranges: [][2]u32 = &.{};
 
         // Mesh 0: unit UV sphere.
         {
@@ -154,6 +162,22 @@ pub const Gpu3d = struct {
             tube_range = try bakeInto(gpa, &builder, &refs, &handle_pages, "tube", verts.items, indices.items);
         }
 
+        // Meshes 2…N (optional): whatever the domain wants to draw, in parts.
+        if (comptime @hasDecl(D, "extraMeshes")) {
+            const parts = try D.extraMeshes(gpa);
+            defer {
+                for (parts) |p| {
+                    gpa.free(p.verts);
+                    gpa.free(p.idx);
+                }
+                gpa.free(parts);
+            }
+            extra_ranges = try gpa.alloc([2]u32, parts.len);
+            for (parts, 0..) |p, i| {
+                extra_ranges[i] = try bakeInto(gpa, &builder, &refs, &handle_pages, "extra", p.verts, p.idx);
+            }
+        }
+
         // One tiny archive; every page resident from frame zero.
         const new_index = try builder.writeTo(io, .cwd(), "e8-scene.gpak", 3);
         defer gpa.free(new_index);
@@ -164,6 +188,7 @@ pub const Gpu3d = struct {
         self.total_pages = @intCast(archive.pages.len);
         self.sphere_range = sphere_range;
         self.tube_range = tube_range;
+        self.extra_ranges = extra_ranges;
 
         self.pages = try gpa.alloc([]const u8, self.total_pages);
         errdefer gpa.free(self.pages);

@@ -33,9 +33,11 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/slides.zig"),
+    @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
     @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
+    @import("../../plugins/atmosphere.zig"),
 };
 
 pub fn generate() [n]Point {
@@ -330,12 +332,10 @@ pub fn inspect(a: *App, i: usize, tbuf: *[96]u8, bbuf: *[512]u8) InspectText {
         .lepton => "Color-singlet fermion slot; its 24 CPTt states across the generations form one 24-cell.",
         .quark => "Fundamental 3/3̄ fermion slot; its 24 CPTt states across the generations form one 24-cell.",
     };
-    const b = std.fmt.bufPrint(bbuf, "coords ({d:.1},{d:.1},{d:.1},{d:.1},{d:.1},{d:.1},{d:.1},{d:.1})\nλ3={d:.2}  λ8={d:.2}  w={d:.1}  B−L={d:.2}  ·  {s}  ·  56 nearest neighbors\ntriality orbit: #{d} → #{d} → #{d} (lit in the scene; G in the main window rides it)\n{s}\nrefs: 0711.0770 Table 9 · 2407.02497", .{
-        r.v[0], r.v[1], r.v[2], r.v[3], r.v[4], r.v[5], r.v[6], r.v[7],
-        r.t3,   r.t8,   r.w,    r.bl,
-        if (r.integer) "so(16) adjoint" else "16⁺ spinor",
-        i,      p1,     p2,
+    const b = std.fmt.bufPrint(bbuf, "{s}\n\nOne of the 240 roots of E8, a {s}.\nTriality orbit #{d} → #{d} → #{d} — lit in the scene; G rides it in the main window.\n\nrefs: 0711.0770 Table 9 · 2407.02497", .{
         blurb,
+        if (r.integer) "so(16) adjoint direction" else "16⁺ spinor weight",
+        i, p1, p2,
     }) catch "";
     return .{ .title_len = t.len, .body_len = b.len };
 }
@@ -344,7 +344,7 @@ pub fn inspect(a: *App, i: usize, tbuf: *[96]u8, bbuf: *[512]u8) InspectText {
 
 pub fn figure(a: *App, fig_id: []const u8, dots: []hud_mod.FigDot) usize {
     var n_dots: usize = 0;
-    for (&a.points) |*r| {
+    for (a.points) |*r| {
         var x: f32 = 0;
         var y: f32 = 0;
         var rgb: [3]f32 = undefined;
@@ -388,8 +388,8 @@ pub fn figure(a: *App, fig_id: []const u8, dots: []hud_mod.FigDot) usize {
 // --- export ----------------------------------------------------------------------------------
 
 pub fn exportCsv(a: *App) !void {
-    const csv = try e8.buildCsv(a.gpa, &a.points, &a.basis);
+    const csv = try e8.buildCsv(a.gpa, a.points, &a.basis);
     defer a.gpa.free(csv);
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "e8_roots.csv", .data = csv });
-    std.debug.print("exported e8_roots.csv ({d} roots, current projection)\n", .{n});
+    std.debug.print("exported e8_roots.csv ({d} roots, current projection)\n", .{a.count()});
 }

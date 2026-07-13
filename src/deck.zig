@@ -11,7 +11,11 @@ pub const Slide = struct {
     /// Names resolved against the domain's tables at show time.
     preset: []const u8,
     color: []const u8 = "",
-    edge: []const u8 = "all",
+    /// Empty means "all" — the default is the empty string, NOT the word, because
+    /// `std.zon.parse.free` frees every string field it can see and a non-empty
+    /// default is a static literal it must not touch. An omitted `.edge` used to
+    /// crash the deinit; now it simply means "show every edge" (see slides.show).
+    edge: []const u8 = "",
     filter: []const u8 = "",
     tumble: bool = false,
     /// Camera target (yaw, pitch, dist), eased in.

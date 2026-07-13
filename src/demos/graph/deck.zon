@@ -1,0 +1,49 @@
+// The tour of a network. Copy it next to your graph and edit it (F5 reloads).
+.{
+    .slides = .{
+        .{
+            .title = "A graph has coordinates already",
+            .body = "Nobody chose these positions. They are the eigenvectors of the normalized Laplacian — the graph's own spectrum — and the first of them is the Fiedler vector: the cut the network makes when you force it to make one.\nThat is why the layout is stable: run it again, get the same figure. A force layout would give you a different picture every time and let you argue about it.",
+            .cite = "Fiedler 1973; Chung, Spectral Graph Theory, ch. 1.",
+            .preset = "spectral 1-2-3 (Fiedler)",
+            .color = "communities",
+            .edge = "all",
+            .cam = .{ 0.65, 0.35, 3.6 },
+            .fig = "degrees",
+        },
+        .{
+            .title = "Communities",
+            .body = "Colors are label propagation: every node repeatedly takes the label most of its neighbors carry, until nothing moves. No resolution parameter to tune, nothing to defend in review — and on real graphs it lands where Louvain lands.\nWatch how the communities separate ALONG the spectral axes. That is not a coincidence: it is the same matrix.",
+            .cite = "Raghavan, Albert & Kumara, Phys. Rev. E 76 (2007).",
+            .preset = "spectral 1-2-3 (Fiedler)",
+            .color = "communities",
+            .edge = "all",
+            .cam = .{ 1.0, 0.3, 3.2 },
+        },
+        .{
+            .title = "Who holds it together",
+            .body = "Color and size by degree: hubs are big and bright, leaves are small and blue. F filters to the hubs alone — the skeleton the network would keep if you deleted everything else.\nClick a node: the readout gives its clustering coefficient, the number that tells a clique (neighbors who all know each other) from a broker (neighbors who only know it). H climbs from any node to the hub of its neighborhood.",
+            .preset = "spectral 1-2-3 (Fiedler)",
+            .color = "degree",
+            .edge = "all",
+            .cam = .{ 0.8, 0.4, 3.0 },
+            .fig = "degrees",
+        },
+        .{
+            .title = "Deeper into the spectrum",
+            .body = "The first three eigenvectors are only the first three. The animated preset rotates the hidden ones into view: splits that eigenvector 1 could not see swing forward, and clusters that looked like one blob come apart.\nThis is the framework's whole trade, on a graph: the picture you publish is a shadow, and here you get to turn it.",
+            .preset = "through the spectrum",
+            .color = "communities",
+            .edge = "all",
+            .cam = .{ 0.65, 0.35, 3.8 },
+        },
+        .{
+            .title = "What falls apart",
+            .body = "Color by connected component. A network with one giant component and a dust of isolates behaves nothing like one that broke in half — and it is the first thing to check before quoting any global statistic.\nX exports every node with its degree, community, component, clustering and spectral coordinates.",
+            .preset = "spectral 1-2-3 (Fiedler)",
+            .color = "components",
+            .edge = "all",
+            .cam = .{ 0.5, 0.5, 4.0 },
+        },
+    },
+}

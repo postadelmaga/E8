@@ -9,7 +9,7 @@ const D = app_mod.D;
 pub const id = "actions";
 
 pub fn key(a: *App, code: u32) bool {
-    inline for (D.actions) |act| {
+    for (D.actions) |act| {
         if (act.key == code) {
             act.run(a);
             return true;

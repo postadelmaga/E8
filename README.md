@@ -103,26 +103,30 @@ tour; `Esc` closes the panel (and only then the app — layered).
 ## Controls
 
 ```
-drag        orbit · scroll zoom · click pick a root (click empty space to clear)
-1 / 2 / 3   projection: Coxeter plane · physics axes · lattice e1e2e3 (= Lisi's ωT,ωS spin-boost plane)
-4 / 5 / 6   paper views: G2 plane (g³,g⁸) · F4 graviweak plane · F4↔G2 rotation
-            (in preset 6, ←/→ sweep the F4↔G2 angle and T animates the sweep)
+H           the shortcut card: every key this build binds, this demo's included
 P           the paper journey: opens the side panel on a guided slide, then
             advances — each slide reproduces a figure of the papers AND
             narrates it (citations included), with camera choreography and an
             inline diagram; click a root mid-journey for that particle's own
             story (and its inspector popup), P resumes the tour
+Backspace   one slide back
 K           kiosk mode: the journey auto-advances (per-slide dwell)
-F5          hot-reload deck.zon from the working directory while authoring
+F           fullscreen (F11 too)
+Esc         layered by window focus: in the popup it closes the popup; in the
+            main window it closes the shortcut card, then the panel, then the app
+
+drag        orbit · scroll zoom · click pick a root (click empty space to clear)
+1 / 2 / 3   projection: Coxeter plane · physics axes · lattice e1e2e3 (= Lisi's ωT,ωS spin-boost plane)
+4 / 5 / 6   paper views: G2 plane (g³,g⁸) · F4 graviweak plane · F4↔G2 rotation
+            (in preset 6, ←/→ sweep the F4↔G2 angle and T animates the sweep)
 ← / →       rotate the view basis through the current 8D plane · Tab next plane
 T           8D tumble · Space 3D auto-spin · R reset view
-E           edges: all → triality partners → selection-only → none
 C           colors: physics classes → generations (triality) → so(16) 120⊕128 → hidden depth
-F           filter: all → bosons → fermions → gen I/II/III → leptons → quarks → d4 blocks
+S           subset filter: all → bosons → fermions → gen I/II/III → leptons → quarks → d4 blocks
+E           edges: all → triality partners → selection-only → none
 G           jump the selected root to its triality partner (gen I → II → III → I)
+O           open the slide editor · F5 hot-reload deck.zon while authoring
 X           export e8_roots.csv (coordinates, labels, weights, charges, triality)
-Esc         layered by window focus: in the popup it closes the popup; in the
-            main window it closes the panel, then the app
 ```
 
 `X` writes the full system under the *current* projection — ready for

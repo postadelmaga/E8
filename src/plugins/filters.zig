@@ -1,6 +1,7 @@
-//! Point filters (F), from the domain's table; filtered-out points render dim.
+//! Point filters (S = subset), from the domain's table; filtered-out points render dim.
 
 const std = @import("std");
+const keys = @import("../keys.zig");
 const app_mod = @import("../app.zig");
 const App = app_mod.App;
 const D = app_mod.D;
@@ -23,7 +24,7 @@ pub fn setByName(a: *App, name: []const u8) void {
 }
 
 pub fn key(a: *App, code: u32) bool {
-    if (code != 33) return false; // F
+    if (code != keys.subset) return false; // S
     const st = a.pluginState(@This());
     st.filter = (st.filter + 1) % @as(u32, @intCast(D.filters.len));
     a.status_dirty = true;

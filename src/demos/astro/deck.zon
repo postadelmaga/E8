@@ -31,7 +31,7 @@
         },
         .{
             .title = "The near and the bright are not the same stars",
-            .body = "F filters: naked-eye stars (m ≤ 6) — the sky humans named — then the ones within 25 parsecs. They are almost disjoint sets. The stars we see are the luminous ones far away; the stars around us are dim red dwarfs nobody ever gave a name.\nThis is selection bias you can look at from the side.",
+            .body = "S filters: naked-eye stars (m ≤ 6) — the sky humans named — then the ones within 25 parsecs. They are almost disjoint sets. The stars we see are the luminous ones far away; the stars around us are dim red dwarfs nobody ever gave a name.\nThis is selection bias you can look at from the side.",
             .preset = "galactic plane",
             .color = "distance",
             .edge = "none",

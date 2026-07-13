@@ -71,9 +71,9 @@ pub fn buildEdges(gpa, points) ![]const [2]u16    // the lines (bonds, roots, �
 
 pub const presets: []const PresetDef              // projections (keys 1..9)
 pub const color_modes: []const ColorModeDef       // C cycles these, legends included
-pub const filters: []const FilterDef              // F cycles these
+pub const filters: []const FilterDef              // S cycles these
 pub const relations: []const RelationDef          // partner maps (triality, antipode…)
-pub const actions: []const ActionDef              // key-bound domain verbs (G, …)
+pub const actions: []const ActionDef              // key-bound domain verbs (G, N, M, B, J…)
 pub const plugins = .{ … };                       // which framework plugins to load
 
 pub fn descriptor(a, i) descriptor.Object         // how point i looks and behaves
@@ -135,7 +135,7 @@ untouched.
 | `data` | any CSV/TSV | principal axes, raw axes | class, a ramp per numeric column | k-NN graph, nearest neighbor (N) |
 | `embed` | `.npy`, CSV | **PCA ⇄ t-SNE, in the same point** | labels, k-means clusters, neighbor agreement | cosine k-NN, 5 nearest listed (N) |
 | `chem` | PDB, XYZ | as deposited, inertia axes | CPK elements, chains, residue chemistry, B-factor | **the ruler: M marks an atom, distances in Å** |
-| `graph` | GraphML, edge list | **the Laplacian spectrum** | communities (label propagation), degree, components | clustering coefficient, hub climb (H) |
+| `graph` | GraphML, edge list | **the Laplacian spectrum** | communities (label propagation), degree, components | clustering coefficient, hub climb (J) |
 | `astro` | catalog CSV (Gaia/HYG/SIMBAD) | equatorial, galactic plane | blackbody stellar color, distance, luminosity | **the HR diagram**, nearest star (N) |
 
 Two of them make the framework's central trick mean something field-specific.
@@ -200,6 +200,26 @@ single material — parts are how a domain gets more than one color into its obj
 The M-theory demo uses it to open a root and show the Calabi–Yau curled up inside
 it, one part per patch of the quintic. Nothing in the framework knows that is what
 they are.
+
+### The keys — one table, three consumers
+
+`src/keys.zig` holds every code the framework binds, and the rows the user reads.
+It exists because the alternative had already failed: shortcuts spelled as raw
+evdev numbers at the point of use (`if (code != 18) return false; // E`) let two
+plugins claim `E`, which made the editor unreachable, while the banner printed at
+startup went on promising it. A key binds three things at once — the plugin that
+handles it, the help the user opens, and the guide drawn over the scene — so it is
+declared once and read three times.
+
+The layout: presenting gets the keys you can find in the dark (`P` next, `Backspace`
+back, `K` kiosk, `F` fullscreen, `H` help); everything that changes what you see is
+the letter that names it (`C` colors, `S` subset, `E` edges, `T` tumble, `R` reset,
+`O` editor, `X` export); the domains get what is left (`G`, `N`, `M`, `B`, `J`, `±`)
+and declare theirs in `actions`, whose `help` line lands in the card automatically.
+
+`src/plugins/guide.zig` builds that card from `keys.help_rows` and `D.actions`, so a
+demo that adds a key documents it by adding it. Esc is layered: the card first, then
+the panel, then the app.
 
 ### The editor — authoring the deck from inside the demo
 

@@ -16,6 +16,7 @@ const read = @import("read.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
+const keys = @import("../../keys.zig");
 const app_mod = @import("../../app.zig");
 const App = app_mod.App;
 
@@ -44,6 +45,7 @@ pub const plugins = .{
     @import("../../plugins/selection.zig"),
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
+    @import("../../plugins/guide.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
@@ -499,7 +501,7 @@ fn actHub(a: *App) void {
 }
 
 pub const actions = &[_]app_mod.ActionDef{
-    .{ .key = 35, .help = "H: climb to the hub of this node's neighborhood", .run = actHub },
+    .{ .key = keys.domain_h, .help = "J: climb to the hub of this node's neighborhood", .run = actHub },
 };
 
 // --- readouts ---------------------------------------------------------------------------------
@@ -540,7 +542,7 @@ fn nameOf(i: usize) []const u8 {
 
 pub fn describe(a: *App, i: usize, buf: []u8) []const u8 {
     const p = &a.points[i];
-    return std.fmt.bufPrint(buf, "{s} · degree {d} · community {d} · clustering {d:.2} · H climbs to {s}", .{
+    return std.fmt.bufPrint(buf, "{s} · degree {d} · community {d} · clustering {d:.2} · J climbs to {s}", .{
         nameOf(i),
         p.degree,
         p.community,
@@ -556,7 +558,7 @@ pub fn story(a: *App) void {
         const body = std.fmt.bufPrint(&buf,
             \\{d} nodes, {d} edges, {d} connected component(s). The positions are not a drawing anyone chose: they are the graph's own SPECTRUM — the eigenvectors of the normalized Laplacian, from the second up. Axis 1 is the Fiedler vector, the cut the graph makes if forced to make one.
             \\So rotating the hidden axes (←/→, or the animated preset) walks you through the spectrum: the split that hides behind eigenvector 4 swings into view like any other rotation.
-            \\C: communities (label propagation), degree, components. F: hubs, the giant component, one community at a time. H climbs from a node to the hub of its neighborhood.
+            \\C: communities (label propagation), degree, components. S: hubs, the giant component, one community at a time. J climbs from a node to the hub of its neighborhood.
         , .{ a.points.len, g.edges.len, n_comp }) catch "";
         hud.setPanel("The network", body, app_mod.cli.file);
         return;

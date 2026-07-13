@@ -22,7 +22,7 @@
         },
         .{
             .title = "Who holds it together",
-            .body = "Color and size by degree: hubs are big and bright, leaves are small and blue. F filters to the hubs alone — the skeleton the network would keep if you deleted everything else.\nClick a node: the readout gives its clustering coefficient, the number that tells a clique (neighbors who all know each other) from a broker (neighbors who only know it). H climbs from any node to the hub of its neighborhood.",
+            .body = "Color and size by degree: hubs are big and bright, leaves are small and blue. S filters to the hubs alone — the skeleton the network would keep if you deleted everything else.\nClick a node: the readout gives its clustering coefficient, the number that tells a clique (neighbors who all know each other) from a broker (neighbors who only know it). J climbs from any node to the hub of its neighborhood.",
             .preset = "spectral 1-2-3 (Fiedler)",
             .color = "degree",
             .edge = "all",

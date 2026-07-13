@@ -9,6 +9,7 @@ const std = @import("std");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
+const keys = @import("../../keys.zig");
 const app_mod = @import("../../app.zig");
 const App = app_mod.App;
 
@@ -32,6 +33,7 @@ pub const plugins = .{
     @import("../../plugins/selection.zig"),
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
+    @import("../../plugins/guide.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
@@ -241,7 +243,7 @@ fn actAntipode(a: *App) void {
 }
 
 pub const actions = &[_]app_mod.ActionDef{
-    .{ .key = 34, .help = "G: jump to the antipodal vertex", .run = actAntipode },
+    .{ .key = keys.domain_g, .help = "G: jump to the antipodal vertex", .run = actAntipode },
 };
 
 pub fn descriptor(a: *App, i: usize) desc.Object {

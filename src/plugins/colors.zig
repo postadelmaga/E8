@@ -1,6 +1,7 @@
 //! Color modes (C), from the domain's table; keeps the HUD legend in sync.
 
 const std = @import("std");
+const keys = @import("../keys.zig");
 const app_mod = @import("../app.zig");
 const App = app_mod.App;
 const D = app_mod.D;
@@ -21,7 +22,7 @@ pub fn setByName(a: *App, name: []const u8) void {
 }
 
 pub fn key(a: *App, code: u32) bool {
-    if (code != 46) return false; // C
+    if (code != keys.colors) return false; // C
     const st = a.pluginState(@This());
     st.mode = (st.mode + 1) % @as(u32, @intCast(D.color_modes.len));
     a.status_dirty = true;

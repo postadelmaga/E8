@@ -23,6 +23,7 @@
 const std = @import("std");
 const zrame = @import("zrame");
 const widget = zrame.widget;
+const keys = @import("../keys.zig");
 const app_mod = @import("../app.zig");
 const App = app_mod.App;
 const D = app_mod.D;
@@ -189,7 +190,7 @@ pub fn deinit(a: *App) void {
 pub fn key(a: *App, code: u32) bool {
     // O, not E: E is the edge-mode cycle, `edges` is registered before this plugin
     // in every domain, and `dispatchKey` stops at the first plugin that claims a key.
-    if (code != 24) return false; // O
+    if (code != keys.editor) return false; // O
     const st = a.pluginState(@This());
     if (st.win == null) open(a) else close(a);
     return true;
@@ -231,11 +232,11 @@ pub fn post(a: *App) void {
         const path = slides.deckPath();
         std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = path, .data = sh.zon[0..sh.zlen] }) catch |e| {
             var buf: [128]u8 = undefined;
-            sh.setNote(std.fmt.bufPrint(&buf, "salvataggio fallito: {s}", .{@errorName(e)}) catch "salvataggio fallito");
+            sh.setNote(std.fmt.bufPrint(&buf, "save failed: {s}", .{@errorName(e)}) catch "save failed");
             return;
         };
         var buf: [128]u8 = undefined;
-        sh.setNote(std.fmt.bufPrint(&buf, "salvato in {s}", .{path}) catch "salvato");
+        sh.setNote(std.fmt.bufPrint(&buf, "saved to {s}", .{path}) catch "saved");
     }
 }
 
@@ -248,7 +249,7 @@ fn applyZon(a: *App, sh: *Shared) void {
 
     const d = deck_mod.parse(a.gpa, z) catch |e| {
         var buf: [128]u8 = undefined;
-        sh.setNote(std.fmt.bufPrint(&buf, "il deck non si legge: {s}", .{@errorName(e)}) catch "deck illeggibile");
+        sh.setNote(std.fmt.bufPrint(&buf, "the deck will not parse: {s}", .{@errorName(e)}) catch "deck will not parse");
         return;
     };
     deck_mod.deinit(a.gpa, sl.deck);
@@ -390,7 +391,7 @@ fn republish(m: *Model) void {
     sh.lock();
     defer sh.unlock();
     if (src.len > sh.zon.len) {
-        sh.setNote("il deck e' troppo grande per l'anteprima");
+        sh.setNote("the deck is too large to preview");
         return;
     }
     @memcpy(sh.zon[0..src.len], src);
@@ -404,14 +405,14 @@ fn republish(m: *Model) void {
 fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     const m: *Model = @ptrCast(@alignCast(user.?));
 
-    ui.heading("Slide");
+    ui.heading("Slides");
 
     // The deck, as a list. Selecting a slide previews it in the window next door.
     ui.beginScroll("deck", 150);
     var buf: [128]u8 = undefined;
     for (m.slides.items, 0..) |*s, i| {
         ui.pushIdScopeIndex(i);
-        const title = if (s.title.items.len > 0) s.title.items else "(senza titolo)";
+        const title = if (s.title.items.len > 0) s.title.items else "(untitled)";
         const row = std.fmt.bufPrint(&buf, "{d}. {s}", .{ i + 1, title }) catch title;
         if (ui.selectable(row, m.sel == i)) {
             m.sel = i;
@@ -422,10 +423,10 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     ui.endScroll();
 
     ui.beginRow();
-    if (ui.button("＋ nuova")) {
+    if (ui.button("＋ new")) {
         var e = EdSlide{};
-        setText(&e.title, m.gpa, "Nuova slide");
-        setText(&e.body, m.gpa, "Il testo della slide.");
+        setText(&e.title, m.gpa, "New slide");
+        setText(&e.body, m.gpa, "The text of the slide.");
         // A new slide starts from what is on screen: the preset in use and the
         // camera you are looking through. Authoring is aiming, then writing.
         e.preset = @min(@as(usize, 0), g_presets.len -| 1);
@@ -433,7 +434,7 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
         m.sel = m.slides.items.len -| 1;
         m.touched = true;
     }
-    if (m.slides.items.len > 0 and ui.button("elimina")) {
+    if (m.slides.items.len > 0 and ui.button("delete")) {
         var e = m.slides.orderedRemove(m.sel);
         e.deinit(m.gpa);
         m.sel = m.sel -| 1;
@@ -453,47 +454,47 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     ui.separator();
 
     if (m.slides.items.len == 0) {
-        ui.labelDim("Il deck e' vuoto. Premi ＋ per la prima slide.");
+        ui.labelDim("The deck is empty. Press ＋ for the first slide.");
         flush(m);
         return;
     }
 
     const s = &m.slides.items[@min(m.sel, m.slides.items.len - 1)];
 
-    ui.labelDim("titolo");
+    ui.labelDim("title");
     if (ui.textField("title", &s.title) != .idle) m.touched = true;
-    ui.labelDim("testo");
+    ui.labelDim("body");
     if (ui.textArea("body", &s.body, 150) != .idle) m.touched = true;
-    ui.labelDim("citazione");
+    ui.labelDim("citation");
     if (ui.textField("cite", &s.cite) != .idle) m.touched = true;
 
     ui.gap(6);
-    ui.labelDim("proiezione");
+    ui.labelDim("projection");
     if (ui.dropdown("preset", g_presets, &s.preset)) m.touched = true;
-    ui.labelDim("colore");
+    ui.labelDim("color");
     if (ui.dropdown("color", g_colors, &s.color)) m.touched = true;
-    ui.labelDim("filtro");
+    ui.labelDim("subset filter");
     if (ui.dropdown("filter", g_filters, &s.filter)) m.touched = true;
-    ui.labelDim("legami");
+    ui.labelDim("edges");
     if (ui.dropdown("edge", g_edges, &s.edge)) m.touched = true;
-    ui.labelDim("figura nel pannello (id del dominio, vuoto = nessuna)");
+    ui.labelDim("panel figure (the domain's id, empty = none)");
     if (ui.textField("fig", &s.fig) != .idle) m.touched = true;
 
     ui.gap(6);
-    if (ui.toggle("rotazione lenta", &s.tumble)) m.touched = true;
-    if (ui.slider("secondi in kiosk", &s.dwell, 5, 90)) m.touched = true;
+    if (ui.toggle("slow tumble", &s.tumble)) m.touched = true;
+    if (ui.slider("seconds in kiosk", &s.dwell, 5, 90)) m.touched = true;
 
     // The camera is not typed in, it is AIMED: orbit the scene next door until it
     // looks right, then take it.
     ui.beginRow();
-    if (ui.button("cattura camera")) {
+    if (ui.button("take the camera")) {
         const sh = m.shared;
         sh.lock();
         s.cam = sh.cam;
         sh.unlock();
         m.touched = true;
     }
-    if (s.cam != null and ui.button("scorda camera")) {
+    if (s.cam != null and ui.button("drop the camera")) {
         s.cam = null;
         m.touched = true;
     }
@@ -501,12 +502,12 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     if (s.cam) |c| {
         const cs = std.fmt.bufPrint(&buf, "camera  yaw {d:.2}  pitch {d:.2}  dist {d:.2}", .{ c[0], c[1], c[2] }) catch "";
         ui.labelDim(cs);
-    } else ui.labelDim("camera libera (la slide non la muove)");
+    } else ui.labelDim("free camera (this slide does not move it)");
 
     ui.gap(8);
     ui.separator();
     ui.beginRow();
-    if (ui.buttonPrimary("salva")) {
+    if (ui.buttonPrimary("save")) {
         republish(m); // save what is on screen, not what was last previewed
         const sh = m.shared;
         sh.lock();

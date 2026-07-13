@@ -3,6 +3,7 @@
 //! point highlight white on both render paths.
 
 const std = @import("std");
+const keys = @import("../keys.zig");
 const app_mod = @import("../app.zig");
 const App = app_mod.App;
 const D = app_mod.D;
@@ -57,7 +58,7 @@ pub fn setByName(a: *App, name: []const u8) void {
 }
 
 pub fn key(a: *App, code: u32) bool {
-    if (code != 18) return false; // E
+    if (code != keys.edges) return false; // E
     const st = a.pluginState(@This());
     // all → relations… → selection → off → all
     const n_rel: u32 = @intCast(D.relations.len);

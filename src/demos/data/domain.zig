@@ -20,6 +20,7 @@ const table = @import("table.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
+const keys = @import("../../keys.zig");
 const app_mod = @import("../../app.zig");
 const App = app_mod.App;
 
@@ -50,6 +51,7 @@ pub const plugins = .{
     @import("../../plugins/selection.zig"),
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
+    @import("../../plugins/guide.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
@@ -450,7 +452,7 @@ var relation_buf: [1]app_mod.RelationDef = undefined;
 pub var relations: []const app_mod.RelationDef = &.{};
 
 pub const actions = &[_]app_mod.ActionDef{
-    .{ .key = 49, .help = "N: hop to the nearest neighbor", .run = actNearest }, // N
+    .{ .key = keys.domain_n, .help = "N: hop to the nearest neighbor", .run = actNearest }, // N
 };
 
 fn actNearest(a: *App) void {
@@ -626,7 +628,7 @@ pub fn story(a: *App) void {
             n_coords,
             if (class_col) |c| blk: {
                 var cb: [96]u8 = undefined;
-                break :blk std.fmt.bufPrint(&cb, "Colors are the '{s}' column ({d} classes); C cycles a ramp per numeric column, F filters one class at a time.", .{ tbl.columns[c].name, n_classes }) catch "";
+                break :blk std.fmt.bufPrint(&cb, "Colors are the '{s}' column ({d} classes); C cycles a ramp per numeric column, S filters one class at a time.", .{ tbl.columns[c].name, n_classes }) catch "";
             } else "The table has no categorical column, so color falls back to the numeric ramps (C cycles them).",
         }) catch "";
         hud.setPanel("The dataset", body, app_mod.cli.file);

@@ -18,6 +18,7 @@ const read = @import("read.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
+const keys = @import("../../keys.zig");
 const app_mod = @import("../../app.zig");
 const App = app_mod.App;
 
@@ -47,6 +48,7 @@ pub const plugins = .{
     @import("../../plugins/selection.zig"),
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
+    @import("../../plugins/guide.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
@@ -445,7 +447,7 @@ fn actMark(a: *App) void {
 }
 
 pub const actions = &[_]app_mod.ActionDef{
-    .{ .key = 50, .help = "M: mark this atom (then select another to measure the distance)", .run = actMark },
+    .{ .key = keys.domain_m, .help = "M: mark this atom (then select another to measure the distance)", .run = actMark },
 };
 
 pub fn status(a: *App, buf: []u8) []const u8 {
@@ -526,7 +528,7 @@ pub fn story(a: *App) void {
         var buf: [720]u8 = undefined;
         const body = std.fmt.bufPrint(&buf,
             \\{d} atoms, {d} bonds{s}. Bonds the file declared (CONECT) are drawn as given; the rest are inferred from covalent radii — r₁ + r₂ + 0.4 Å, the tolerance every viewer uses.
-            \\C: elements (CPK), chains, residue chemistry, B-factor. F filters heavy atoms, the backbone, the ligands, one chain at a time.
+            \\C: elements (CPK), chains, residue chemistry, B-factor. S filters heavy atoms, the backbone, the ligands, one chain at a time.
             \\Click an atom for its row. Press M to mark it, then click another: the HUD reads out the distance in ångström — hydrogen bonds, coordination spheres, clashes.
         , .{
             atoms.len,

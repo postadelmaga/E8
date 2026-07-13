@@ -35,6 +35,7 @@ const e10 = @import("e10.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
+const keys = @import("../../keys.zig");
 const app_mod = @import("../../app.zig");
 const filters_p = @import("../../plugins/filters.zig");
 const cinema = @import("cinema.zig");
@@ -62,6 +63,7 @@ pub const plugins = .{
     @import("../../plugins/selection.zig"),
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
+    @import("../../plugins/guide.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
@@ -357,10 +359,10 @@ fn actLadder(a: *App) void {
 }
 
 pub const actions = &[_]app_mod.ActionDef{
-    .{ .key = 48, .help = "B: the Big Bang — wind time back to t = 0 (the E10 billiard)", .run = cinema.toggle },
-    .{ .key = 13, .help = "+: raise the level — unveil the next field of M-theory", .run = actLevelUp },
-    .{ .key = 12, .help = "-: lower the level", .run = actLevelDown },
-    .{ .key = 34, .help = "G: climb the 3-form ladder (metric → M2 → M5 → dual graviton)", .run = actLadder },
+    .{ .key = keys.domain_b, .help = "B: the Big Bang — wind time back to t = 0 (the E10 billiard)", .run = cinema.toggle },
+    .{ .key = keys.domain_plus, .help = "+: raise the level — unveil the next field of M-theory", .run = actLevelUp },
+    .{ .key = keys.domain_minus, .help = "-: lower the level", .run = actLevelDown },
+    .{ .key = keys.domain_g, .help = "G: climb the 3-form ladder (metric → M2 → M5 → dual graviton)", .run = actLadder },
 };
 
 // --- how a root looks and behaves --------------------------------------------------------

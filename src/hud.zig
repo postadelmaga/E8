@@ -70,6 +70,17 @@ pub const Hud = struct {
     p_fig: [72]FigDot = undefined,
     p_fig_len: usize = 0,
 
+    /// The shortcut card (H). Its text is built once, at startup, from `keys.zig`
+    /// and the domain's own actions — the HUD only draws it.
+    /// One row per line, key and description split by a tab.
+    help_on: std.atomic.Value(bool) = .init(false),
+    help_txt: [2400]u8 = undefined,
+    help_len: usize = 0,
+    /// The strip drawn over the scene at all times: the keys someone who has never
+    /// seen this program needs in order to get anywhere.
+    guide: [160]u8 = undefined,
+    guide_len: usize = 0,
+
     pub fn tick(self: *Hud, now_ns: i128) void {
         defer self.last_ns = now_ns;
         if (self.last_ns == 0) return;
@@ -127,6 +138,27 @@ pub const Hud = struct {
         defer self.lock.unlock();
         self.p_fig_len = @min(dots.len, self.p_fig.len);
         @memcpy(self.p_fig[0..self.p_fig_len], dots[0..self.p_fig_len]);
+    }
+
+    /// The shortcut card's text (rows of "keys\tdescription") and the always-on
+    /// guide strip. Written once at startup by the `guide` plugin.
+    pub fn setHelp(self: *Hud, rows: []const u8, strip: []const u8) void {
+        defer self.dirty();
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.help_len = @min(rows.len, self.help_txt.len);
+        @memcpy(self.help_txt[0..self.help_len], rows[0..self.help_len]);
+        self.guide_len = @min(strip.len, self.guide.len);
+        @memcpy(self.guide[0..self.guide_len], strip[0..self.guide_len]);
+    }
+
+    pub fn helpOn(self: *const Hud) bool {
+        return self.help_on.load(.monotonic);
+    }
+
+    pub fn setHelpOn(self: *Hud, on: bool) void {
+        self.help_on.store(on, .monotonic);
+        self.dirty();
     }
 
     pub const LegendIn = struct { rgb: [3]u8, label: []const u8 };
@@ -344,6 +376,104 @@ pub const Hud = struct {
                 });
                 lx += 14 + font.measure(15, .regular, label) + 18;
             }
+        }
+
+        // The guide strip: the way in. A person handed this program with no
+        // instructions has to be able to find the presentation, and it is one key.
+        var gbuf: [160]u8 = undefined;
+        var ng: usize = 0;
+        var hbuf: [2400]u8 = undefined;
+        var nh: usize = 0;
+        if (self.lock.tryLock()) {
+            ng = self.guide_len;
+            nh = self.help_len;
+            @memcpy(gbuf[0..ng], self.guide[0..ng]);
+            @memcpy(hbuf[0..nh], self.help_txt[0..nh]);
+            self.lock.unlock();
+        }
+        if (ng > 0) {
+            const g = gbuf[0..ng];
+            const gw = font.measure(15, .regular, g);
+            const gx = @as(i32, @intCast(content.x)) + @divTrunc(@as(i32, @intCast(content.w)) - gw, 2);
+            const gy = @as(i32, @intCast(content.y + content.h)) - 54;
+            canvas.fillRoundedRect(
+                @floatFromInt(gx - 16),
+                @floatFromInt(gy - 20),
+                @floatFromInt(gw + 32),
+                30,
+                15,
+                zrame.Color.rgba(10, 12, 20, 0.55),
+            );
+            canvas.drawText(font, gx, gy, g, .{
+                .size = 15,
+                .style = .regular,
+                .color = zrame.Color.rgba(198, 208, 224, 0.9),
+            });
+        }
+
+        // The shortcut card (H): every key this build binds, the domain's own
+        // actions included — built from `keys.zig`, so it cannot drift from what the
+        // plugins actually do.
+        if (nh > 0 and self.help_on.load(.monotonic)) drawHelp(canvas, font, content, hbuf[0..nh]);
+    }
+
+    fn drawHelp(canvas: *zrame.Canvas, font: anytype, content: zrame.Rect, txt: []const u8) void {
+        const line_h: i32 = 26;
+        var rows: usize = 0;
+        var it = std.mem.splitScalar(u8, txt, '\n');
+        while (it.next()) |_| rows += 1;
+
+        const w: i32 = @min(@as(i32, @intCast(content.w)) - 80, 760);
+        const h: i32 = @as(i32, @intCast(rows)) * line_h + 76;
+        const x: i32 = @as(i32, @intCast(content.x)) + @divTrunc(@as(i32, @intCast(content.w)) - w, 2);
+        const y: i32 = @as(i32, @intCast(content.y)) + @max(24, @divTrunc(@as(i32, @intCast(content.h)) - h, 2));
+
+        canvas.fillRoundedRect(
+            @floatFromInt(content.x),
+            @floatFromInt(content.y),
+            @floatFromInt(content.w),
+            @floatFromInt(content.h),
+            0,
+            zrame.Color.rgba(0, 0, 0, 0.62),
+        );
+        canvas.fillRoundedRect(@floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h), 16, zrame.Color.rgba(17, 19, 28, 0.97));
+        canvas.strokeRoundedRect(@floatFromInt(x), @floatFromInt(y), @floatFromInt(w), @floatFromInt(h), 16, 1, zrame.Color.rgba(120, 140, 180, 0.35));
+
+        canvas.drawText(font, x + 28, y + 38, "Shortcuts", .{
+            .size = 20,
+            .style = .bold,
+            .color = zrame.Color.rgba(240, 226, 170, 0.97),
+        });
+        canvas.drawText(font, x + w - 28 - font.measure(14, .regular, "H or Esc closes"), y + 38, "H or Esc closes", .{
+            .size = 14,
+            .style = .regular,
+            .color = zrame.Color.rgba(150, 160, 178, 0.85),
+        });
+
+        var ly: i32 = y + 70;
+        it = std.mem.splitScalar(u8, txt, '\n');
+        while (it.next()) |row| {
+            defer ly += line_h;
+            // A row with no tab is a section heading — the domain's own actions get one.
+            const tab = std.mem.indexOfScalar(u8, row, '\t') orelse {
+                if (row.len == 0) continue;
+                canvas.drawText(font, x + 28, ly, row, .{
+                    .size = 15,
+                    .style = .bold,
+                    .color = zrame.Color.rgba(160, 190, 240, 0.9),
+                });
+                continue;
+            };
+            canvas.drawText(font, x + 28, ly, row[0..tab], .{
+                .size = 16,
+                .style = .bold,
+                .color = zrame.Color.rgba(235, 238, 245, 0.97),
+            });
+            canvas.drawText(font, x + 190, ly, row[tab + 1 ..], .{
+                .size = 16,
+                .style = .regular,
+                .color = zrame.Color.rgba(200, 208, 220, 0.92),
+            });
         }
     }
 };

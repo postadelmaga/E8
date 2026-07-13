@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const geom = @import("../geom.zig");
+const keys = @import("../keys.zig");
 const app_mod = @import("../app.zig");
 const App = app_mod.App;
 const D = app_mod.D;
@@ -39,17 +40,17 @@ pub fn applyByName(a: *App, name: []const u8) void {
 pub fn key(a: *App, code: u32) bool {
     const st = a.pluginState(@This());
     switch (code) {
-        2...10 => { // KEY_1..9 → preset index
-            const idx = code - 2;
+        keys.preset_1...keys.preset_9 => { // 1..9 → preset index
+            const idx = code - keys.preset_1;
             if (idx >= D.presets.len) return false;
             apply(a, @intCast(idx));
         },
-        15 => { // Tab
+        keys.tab => { // Tab
             st.plane = (st.plane + 1) % @as(u32, geom.planes.len);
             a.status_dirty = true;
         },
-        105, 106 => { // ←/→: rotate the basis, or sweep an animated preset
-            const th: f32 = if (code == 105) -0.06 else 0.06;
+        keys.left, keys.right => { // ←/→: rotate the basis, or sweep an animated preset
+            const th: f32 = if (code == keys.left) -0.06 else 0.06;
             if (D.presets[a.preset].animated) {
                 st.theta += th;
             } else {
@@ -57,9 +58,9 @@ pub fn key(a: *App, code: u32) bool {
                 geom.rotateBasis(&a.basis, p[0], p[1], th);
             }
         },
-        20 => st.tumble = !st.tumble, // T
-        57 => st.spin = !st.spin, // Space
-        19 => { // R
+        keys.tumble => st.tumble = !st.tumble, // T
+        keys.space => st.spin = !st.spin, // Space
+        keys.reset => { // R
             apply(a, a.preset);
             a.reset_camera = true;
         },

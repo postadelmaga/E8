@@ -82,7 +82,7 @@ pub fn pick(ui: *widget.Ui, b: *Browser) ?[]const u8 {
     if (!b.loaded) b.reload();
 
     ui.beginRow();
-    if (ui.button("↑ su")) {
+    if (ui.button("↑ up")) {
         const up = std.fs.path.dirname(b.cwd.items) orelse "/";
         // dirname borrows from cwd, and setCwd clears cwd — copy first.
         const tmp = b.gpa.dupe(u8, up) catch return null;

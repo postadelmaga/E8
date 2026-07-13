@@ -204,11 +204,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     std.debug.print(
         \\{s} — {d} points, {d} edges (presenter framework)
-        \\  drag orbit · scroll zoom · click pick (opens the inspector popup)
-        \\  1..{d} projection presets · P paper journey · K kiosk · F5 reload deck
-        \\  ←/→ rotate hidden plane (Tab cycles) · T tumble · Space spin
-        \\  E edges · C colors · F filter · R reset · X export
-        \\  Esc closes the focused layer first (popup, panel), then the app
+        \\  H opens the shortcut card — every key this build binds, this demo's included.
+        \\  P next slide · Backspace back · K kiosk · F fullscreen · Esc closes the top layer
+        \\  drag orbit · scroll zoom · click pick (opens the inspector) · 1..{d} presets
         \\
     , .{ D.name, n_pts, edges.len, D.presets.len });
     for (D.actions) |act| std.debug.print("  {s}\n", .{act.help});

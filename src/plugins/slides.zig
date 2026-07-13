@@ -9,6 +9,7 @@ const std = @import("std");
 const geom = @import("../geom.zig");
 const hud_mod = @import("../hud.zig");
 const deck_mod = @import("../deck.zig");
+const keys = @import("../keys.zig");
 const app_mod = @import("../app.zig");
 const App = app_mod.App;
 const D = app_mod.D;
@@ -54,7 +55,7 @@ pub fn deinit(a: *App) void {
 pub fn key(a: *App, code: u32) bool {
     const st = a.pluginState(@This());
     switch (code) {
-        25 => { // P: start the journey, or next slide
+        keys.present => { // P: start the journey, or next slide
             if (st.deck.slides.len == 0) return true;
             if (!a.pluginState(panel).on) {
                 panel.setOpen(a, true);
@@ -64,7 +65,17 @@ pub fn key(a: *App, code: u32) bool {
             show(a, st.idx);
             return true;
         },
-        37 => { // K: kiosk mode
+        keys.backspace => { // Backspace: one slide back — a talk is not a one-way street
+            if (st.deck.slides.len == 0) return true;
+            if (!a.pluginState(panel).on) {
+                panel.setOpen(a, true);
+            } else {
+                st.idx = (st.idx + st.deck.slides.len - 1) % st.deck.slides.len;
+            }
+            show(a, st.idx);
+            return true;
+        },
+        keys.kiosk => { // K: kiosk mode
             st.auto = !st.auto;
             st.auto_t = 0;
             if (st.auto and !a.pluginState(panel).on and st.deck.slides.len > 0) {
@@ -74,14 +85,14 @@ pub fn key(a: *App, code: u32) bool {
             a.status_dirty = true;
             return true;
         },
-        63 => { // F5: hot-reload the deck while authoring
+        keys.f5 => { // F5: hot-reload the deck while authoring
             deck_mod.deinit(a.gpa, st.deck);
             st.deck = deck_mod.load(a.gpa, a.io, deckPath(), D.deck_default);
             st.idx = @min(st.idx, st.deck.slides.len -| 1);
             if (a.pluginState(panel).on and st.deck.slides.len > 0) show(a, st.idx);
             return true;
         },
-        1 => { // Esc: close the topmost layer first, then the app
+        keys.escape => { // Esc: close the topmost layer first, then the app
             if (a.pluginState(panel).on) {
                 panel.setOpen(a, false);
                 st.auto = false;
@@ -168,6 +179,6 @@ pub fn show(a: *App, idx: usize) void {
         a.hud.setPanelFigure(dots[0..nd]);
     }
     var lbuf: [120]u8 = undefined;
-    a.hud.setLine2(std.fmt.bufPrint(&lbuf, "journey {d}/{d} — P next · K kiosk · click a point for its story · Esc closes", .{ idx + 1, st.deck.slides.len }) catch "");
+    a.hud.setLine2(std.fmt.bufPrint(&lbuf, "journey {d}/{d} — P next · Backspace back · K kiosk · H shortcuts · Esc closes", .{ idx + 1, st.deck.slides.len }) catch "");
     a.status_dirty = true;
 }

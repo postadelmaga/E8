@@ -44,12 +44,12 @@ const Category = struct {
 /// The categories, and the tools each one gets. Every entry is a domain that
 /// already exists — the wizard picks one, it does not create one.
 const categories = [_]Category{
-    .{ .label = "Chimica e biologia molecolare", .domain = "chem", .asset = "PDB, XYZ", .tool = .molecule },
-    .{ .label = "Astronomia (cataloghi stellari)", .domain = "astro", .asset = "CSV (Gaia, SIMBAD, HYG)", .tool = .file },
-    .{ .label = "Reti e grafi", .domain = "graph", .asset = "GraphML, lista di archi", .tool = .file },
-    .{ .label = "Dati e tabelle", .domain = "data", .asset = "CSV, TSV", .tool = .file },
+    .{ .label = "Chemistry & structural biology", .domain = "chem", .asset = "PDB, XYZ", .tool = .molecule },
+    .{ .label = "Astronomy (star catalogs)", .domain = "astro", .asset = "CSV (Gaia, SIMBAD, HYG)", .tool = .file },
+    .{ .label = "Networks & graphs", .domain = "graph", .asset = "GraphML, edge list", .tool = .file },
+    .{ .label = "Data & tables", .domain = "data", .asset = "CSV, TSV", .tool = .file },
     .{ .label = "Embeddings / ML", .domain = "embed", .asset = ".npy, CSV", .tool = .file },
-    .{ .label = "Matematica e fisica (solo slide)", .domain = "lisi", .asset = "", .tool = .none },
+    .{ .label = "Mathematics & physics (slides only)", .domain = "lisi", .asset = "", .tool = .none },
 };
 
 const Builtin = struct {
@@ -61,15 +61,15 @@ const Builtin = struct {
 };
 
 const builtins = [_]Builtin{
-    .{ .domain = "lisi", .title = "Lisi — E8", .blurb = "Le 240 radici di E8, una per particella elementare. La figura di Coxeter." },
-    .{ .domain = "mtheory", .title = "M-teoria — E10", .blurb = "E10, i campi della supergravita' a 11 dimensioni, il Calabi-Yau e il big bang di Damour-Nicolai." },
-    .{ .domain = "polytope", .title = "Politopo 24-celle", .blurb = "Un politopo regolare in 4 dimensioni, ruotato in R4." },
-    .{ .domain = "molecule", .title = "Molecola (giocattolo)", .blurb = "Quattordici atomi, per capire il framework in due minuti." },
-    .{ .domain = "chem", .title = "Chimica — PDB / XYZ", .blurb = "Una struttura molecolare vera: catene, residui, il righello in angstrom.", .needs_asset = true },
-    .{ .domain = "astro", .title = "Astronomia — catalogo", .blurb = "Un catalogo stellare nello spazio che occupa davvero, con il diagramma H-R.", .needs_asset = true },
-    .{ .domain = "graph", .title = "Grafi — GraphML", .blurb = "Una rete disposta dal suo spettro laplaciano.", .needs_asset = true },
-    .{ .domain = "data", .title = "Dati — CSV", .blurb = "Qualunque tabella, sui suoi assi principali.", .needs_asset = true },
-    .{ .domain = "embed", .title = "Embeddings — .npy", .blurb = "PCA e t-SNE nello stesso punto.", .needs_asset = true },
+    .{ .domain = "lisi", .title = "Lisi — E8", .blurb = "The 240 roots of E8, one per elementary particle. The Coxeter figure." },
+    .{ .domain = "mtheory", .title = "M-theory — E10", .blurb = "E10, the fields of eleven-dimensional supergravity, the Calabi-Yau, and Damour-Nicolai's big bang." },
+    .{ .domain = "polytope", .title = "The 24-cell", .blurb = "A regular polytope in four dimensions, turned in R4." },
+    .{ .domain = "molecule", .title = "Molecule (a toy)", .blurb = "Fourteen atoms — the framework in two minutes." },
+    .{ .domain = "chem", .title = "Chemistry — PDB / XYZ", .blurb = "A real structure: chains, residues, and a ruler in angstroms.", .needs_asset = true },
+    .{ .domain = "astro", .title = "Astronomy — a catalog", .blurb = "A star catalog in the space it really occupies, with the H-R diagram.", .needs_asset = true },
+    .{ .domain = "graph", .title = "Graphs — GraphML", .blurb = "A network laid out by its own Laplacian spectrum.", .needs_asset = true },
+    .{ .domain = "data", .title = "Data — CSV", .blurb = "Any table, on its own principal axes.", .needs_asset = true },
+    .{ .domain = "embed", .title = "Embeddings — .npy", .blurb = "PCA and t-SNE on the same point.", .needs_asset = true },
 };
 
 /// A demo the user made: a directory with a manifest.
@@ -173,8 +173,8 @@ fn jobRun(args: *JobArgs) void {
         m.job.state.store(2, .release);
     } else |e| {
         const msg = switch (e) {
-            error.NotFound => "non trovato",
-            error.NoAtoms => "il file non contiene atomi leggibili",
+            error.NotFound => "not found",
+            error.NoAtoms => "the file holds no atoms anyone can read",
             else => @errorName(e),
         };
         const n = @min(msg.len, m.job.err.len);
@@ -187,7 +187,7 @@ fn jobRun(args: *JobArgs) void {
 fn startJob(m: *Menu, kind: @FieldType(JobArgs, "kind"), query: []const u8) void {
     if (m.job.state.load(.acquire) == 1) return; // one at a time
     if (query.len == 0) {
-        m.say("scrivi prima cosa cercare");
+        m.say("say what to look for first");
         return;
     }
     const args = m.gpa.create(JobArgs) catch return;
@@ -204,10 +204,10 @@ fn startJob(m: *Menu, kind: @FieldType(JobArgs, "kind"), query: []const u8) void
         m.job.state.store(0, .release);
         m.gpa.free(args.query);
         m.gpa.destroy(args);
-        m.say("non riesco ad avviare il download");
+        m.say("cannot start the download");
         return;
     };
-    m.say("scarico…");
+    m.say("downloading…");
 }
 
 /// Collect a finished download on the UI thread — the only place the result is read.
@@ -222,7 +222,7 @@ fn reapJob(m: *Menu) void {
             m.job.state.store(0, .release);
             m.asset_path.clearRetainingCapacity();
             if (m.got) |g| {
-                m.sayFmt("scaricato: {s} ({d} byte)", .{ g.name, g.bytes.len });
+                m.sayFmt("downloaded: {s} ({d} bytes)", .{ g.name, g.bytes.len });
                 // A downloaded molecule names the demo, unless you already did.
                 if (m.demo_name.items.len == 0) {
                     const stem = std.fs.path.stem(g.name);
@@ -234,7 +234,7 @@ fn reapJob(m: *Menu) void {
             if (m.job.thread) |t| t.join();
             m.job.thread = null;
             m.job.state.store(0, .release);
-            m.sayFmt("download fallito: {s}", .{m.job.err[0..m.job.elen]});
+            m.sayFmt("download failed: {s}", .{m.job.err[0..m.job.elen]});
         },
         else => {},
     }
@@ -250,7 +250,7 @@ fn launch(m: *Menu, domain: []const u8, asset: ?[]const u8, deck: ?[]const u8, e
     // wherever it was installed, not only from the build directory.
     var self_buf: [std.fs.max_path_bytes]u8 = undefined;
     const n = std.Io.Dir.readLinkAbsolute(m.io, "/proc/self/exe", &self_buf) catch {
-        m.say("non trovo la cartella degli eseguibili");
+        m.say("cannot find the directory the demos live in");
         return;
     };
     const dir = std.fs.path.dirname(self_buf[0..n]) orelse ".";
@@ -277,12 +277,12 @@ fn launch(m: *Menu, domain: []const u8, asset: ?[]const u8, deck: ?[]const u8, e
         .environ_map = m.env,
         .stdin = .ignore,
     }) catch |e| {
-        m.sayFmt("non parte: {s} ({s})", .{ exe, @errorName(e) });
+        m.sayFmt("will not start: {s} ({s})", .{ exe, @errorName(e) });
         return;
     };
     // Deliberately not waited on: the demo is a sibling window, not a subroutine.
     // The launcher stays open so you can start another.
-    m.sayFmt("aperto {s}", .{domain});
+    m.sayFmt("opened {s}", .{domain});
 }
 
 // --- the user's demos on disk ---------------------------------------------------------------------
@@ -332,13 +332,13 @@ fn createDemo(m: *Menu) void {
     const cat = categories[m.cat];
 
     if (m.demo_name.items.len == 0) {
-        m.say("dai un nome alla demo");
+        m.say("give the demo a name");
         return;
     }
     const needs_asset = cat.asset.len > 0;
     const from_net = m.got != null;
     if (needs_asset and !from_net and m.asset_path.items.len == 0) {
-        m.say("scegli un file, o scaricane uno");
+        m.say("pick a file, or download one");
         return;
     }
 
@@ -348,7 +348,7 @@ fn createDemo(m: *Menu) void {
     defer gpa.free(dir);
 
     std.Io.Dir.cwd().createDirPath(m.io, dir) catch |e| {
-        m.sayFmt("non riesco a creare {s}: {s}", .{ dir, @errorName(e) });
+        m.sayFmt("cannot create {s}: {s}", .{ dir, @errorName(e) });
         return;
     };
 
@@ -360,12 +360,12 @@ fn createDemo(m: *Menu) void {
         asset_rel = std.fmt.allocPrint(gpa, "{s}/{s}", .{ dir, base }) catch return;
         if (from_net) {
             std.Io.Dir.cwd().writeFile(m.io, .{ .sub_path = asset_rel.?, .data = m.got.?.bytes }) catch |e| {
-                m.sayFmt("non riesco a scrivere l'asset: {s}", .{@errorName(e)});
+                m.sayFmt("cannot write the asset: {s}", .{@errorName(e)});
                 return;
             };
         } else {
             std.Io.Dir.cwd().copyFile(m.asset_path.items, std.Io.Dir.cwd(), asset_rel.?, m.io, .{}) catch |e| {
-                m.sayFmt("non riesco a copiare l'asset: {s}", .{@errorName(e)});
+                m.sayFmt("cannot copy the asset: {s}", .{@errorName(e)});
                 return;
             };
         }
@@ -380,7 +380,7 @@ fn createDemo(m: *Menu) void {
     // The manifest.
     {
         const man = std.fmt.allocPrint(gpa,
-            \\// Una demo. Il launcher la legge da qui; l'editor scrive deck.zon.
+            \\// A demo. The launcher reads this; the editor writes deck.zon.
             \\.{{
             \\    .name = "{s}",
             \\    .domain = "{s}",
@@ -403,12 +403,12 @@ fn createDemo(m: *Menu) void {
     defer gpa.free(deck_path);
     {
         const d = std.fmt.allocPrint(gpa,
-            \\// Le slide di "{s}". L'editor riscrive questo file; F5 lo ricarica.
+            \\// The slides of "{s}". The editor rewrites this file; F5 reloads it.
             \\.{{
             \\    .slides = .{{
             \\        .{{
             \\            .title = "{s}",
-            \\            .body = "Scrivi qui. Premi O nella demo per aprire l'editor: la scena accanto e' l'anteprima, e il bottone \"cattura camera\" prende l'inquadratura che stai guardando.",
+            \\            .body = "Write here. Press O in the demo to open the editor: the scene beside it is the preview, and \"take the camera\" keeps the shot you are looking at.",
             \\            .preset = "",
             \\        }},
             \\    }},
@@ -790,7 +790,7 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     ui.beginRow();
     ui.textLine("E8", 26, .bold, ui.theme.accent);
     ui.gap(8);
-    ui.textLine("presentazioni interattive", 15, .regular, ui.theme.text_dim);
+    ui.textLine("interactive papers", 15, .regular, ui.theme.text_dim);
     ui.endRow();
     ui.gap(2);
 
@@ -803,14 +803,14 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     // What you made comes first — it is the reason you opened this.
     if (!m.mine_loaded) loadMine(m);
     if (m.mine.items.len > 0) {
-        shelfTitle(ui, "Le tue demo");
+        shelfTitle(ui, "Your demos");
         const per = perRow(ui);
         var col: usize = 0;
         for (m.mine.items) |d| {
             if (col == 0) ui.beginRow();
             ui.pushIdScopeIndex(slot);
             var buf: [96]u8 = undefined;
-            const sub = std.fmt.bufPrint(&buf, "{s} · {s}", .{ d.domain, if (d.asset.len > 0) d.asset else "solo slide" }) catch d.domain;
+            const sub = std.fmt.bufPrint(&buf, "{s} · {s}", .{ d.domain, if (d.asset.len > 0) d.asset else "slides only" }) catch d.domain;
             switch (card(ui, m, slot, artOf(d.domain), d.name, sub, true)) {
                 .play => openMine(m, d, false),
                 .edit => openMine(m, d, true),
@@ -829,7 +829,7 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     }
 
     // The demos that need nothing: they compute their own points.
-    shelfTitle(ui, "Pronte da guardare");
+    shelfTitle(ui, "Ready to watch");
     {
         const per = perRow(ui);
         var col: usize = 0;
@@ -856,14 +856,14 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
 
     // The demos that need YOUR file: clicking one opens the wizard on that category,
     // which is the only honest thing a poster with no data behind it can do.
-    shelfTitle(ui, "Porta i tuoi dati");
+    shelfTitle(ui, "Bring your own data");
     {
         const per = perRow(ui);
         var col: usize = 0;
         for (categories, 0..) |cat, ci| {
             if (col == 0) ui.beginRow();
             ui.pushIdScopeIndex(slot);
-            const sub = if (cat.asset.len > 0) cat.asset else "nessun file: solo slide";
+            const sub = if (cat.asset.len > 0) cat.asset else "no file needed: slides only";
             if (card(ui, m, slot, artOf(cat.domain), cat.label, sub, false) == .play) {
                 m.cat = ci;
                 m.wizard_wanted = true;
@@ -884,7 +884,7 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
         }
         if (col == 0) ui.beginRow();
         ui.pushIdScopeIndex(slot);
-        if (card(ui, m, slot, .plus, "Nuova demo", "dai un file, esce una presentazione", false) == .play) {
+        if (card(ui, m, slot, .plus, "New demo", "hand it a file, get a presentation", false) == .play) {
             m.wizard_wanted = true;
         }
         ui.popIdScope();
@@ -914,13 +914,13 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
 
 fn wizard(ui: *widget.Ui, m: *Menu) void {
     if (!ui.dialogOpen("wizard")) return;
-    if (!ui.beginDialog("wizard", "Nuova demo", 560, 520)) return;
+    if (!ui.beginDialog("wizard", "New demo", 560, 520)) return;
     defer ui.endDialog();
 
     var names: [categories.len][]const u8 = undefined;
     for (categories, 0..) |cat, i| names[i] = cat.label;
 
-    ui.labelDim("categoria");
+    ui.labelDim("field");
     _ = ui.dropdown("cat", &names, &m.cat);
     const cat = categories[m.cat];
 
@@ -928,17 +928,17 @@ fn wizard(ui: *widget.Ui, m: *Menu) void {
     switch (cat.tool) {
         .molecule => toolMolecule(ui, m),
         .file => toolFile(ui, m, cat),
-        .none => ui.labelDim("Questa categoria calcola i suoi punti da sola: non serve nessun file, scrivi solo le slide."),
+        .none => ui.labelDim("This field computes its own points: no file needed — just write the slides."),
     }
 
     ui.gap(8);
     ui.separator();
-    ui.labelDim("nome della demo");
+    ui.labelDim("name of the demo");
     _ = ui.textField("demo_name", &m.demo_name);
 
     ui.beginRow();
-    if (ui.buttonPrimary("crea e apri nell'editor")) createDemo(m);
-    if (ui.button("annulla")) ui.closeDialog();
+    if (ui.buttonPrimary("create and open in the editor")) createDemo(m);
+    if (ui.button("cancel")) ui.closeDialog();
     ui.endRow();
 
     // `createDemo` spawned the demo and has no `ui` of its own: it says so with a
@@ -964,38 +964,38 @@ fn openMine(m: *Menu, d: UserDemo, editor: bool) void {
 
 /// Chemistry's specialized tool: the molecule need not be a file you already have.
 fn toolMolecule(ui: *widget.Ui, m: *Menu) void {
-    ui.labelDim("Scarica la molecola: per nome da PubChem, o per codice dalla Protein Data Bank.");
+    ui.labelDim("Fetch the molecule: by name from PubChem, or by code from the Protein Data Bank.");
 
-    ui.labelDim("nome (es. caffeine, aspirin, glucose)");
+    ui.labelDim("name (e.g. caffeine, aspirin, glucose)");
     const q = ui.textField("molecule", &m.molecule);
     ui.beginRow();
-    if (ui.button("cerca su PubChem") or q == .submitted) startJob(m, .pubchem, m.molecule.items);
+    if (ui.button("search PubChem") or q == .submitted) startJob(m, .pubchem, m.molecule.items);
     ui.endRow();
 
-    ui.labelDim("codice PDB (es. 1ubq, 4hhb)");
+    ui.labelDim("PDB code (e.g. 1ubq, 4hhb)");
     const p = ui.textField("pdb", &m.pdb_id);
     ui.beginRow();
-    if (ui.button("scarica da RCSB") or p == .submitted) startJob(m, .rcsb, m.pdb_id.items);
+    if (ui.button("download from RCSB") or p == .submitted) startJob(m, .rcsb, m.pdb_id.items);
     ui.endRow();
 
     if (m.job.state.load(.acquire) == 1) {
         ui.beginRow();
         ui.spinner();
-        ui.labelDim("scarico…");
+        ui.labelDim("downloading…");
         ui.endRow();
     } else if (m.got) |g| {
         var buf: [160]u8 = undefined;
-        ui.labelDim(std.fmt.bufPrint(&buf, "pronto: {s}", .{g.name}) catch "");
+        ui.labelDim(std.fmt.bufPrint(&buf, "ready: {s}", .{g.name}) catch "");
     }
 
     ui.gap(4);
-    ui.labelDim("oppure usa un file tuo (PDB o XYZ):");
+    ui.labelDim("or use a file of your own (PDB or XYZ):");
     filePicker(ui, m);
 }
 
 fn toolFile(ui: *widget.Ui, m: *Menu, cat: Category) void {
     var buf: [128]u8 = undefined;
-    ui.labelDim(std.fmt.bufPrint(&buf, "scegli il file ({s})", .{cat.asset}) catch "scegli il file");
+    ui.labelDim(std.fmt.bufPrint(&buf, "pick the file ({s})", .{cat.asset}) catch "pick the file");
     filePicker(ui, m);
 }
 
@@ -1013,7 +1013,7 @@ fn filePicker(ui: *widget.Ui, m: *Menu) void {
     }
     if (m.asset_path.items.len > 0) {
         var buf: [256]u8 = undefined;
-        ui.labelDim(std.fmt.bufPrint(&buf, "scelto: {s}", .{m.asset_path.items}) catch "");
+        ui.labelDim(std.fmt.bufPrint(&buf, "picked: {s}", .{m.asset_path.items}) catch "");
     }
 }
 
@@ -1057,7 +1057,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     // Wide enough for four posters on a line, tall enough to see two shelves at once
     // — a wall of demos is only a wall if you can see it.
     const win = try zrame.Window.init(gpa, host.options(.{
-        .title = "E8 — presentazioni interattive",
+        .title = "E8 — interactive papers",
         .app_id = "dev.presenter.menu",
         .width = 980,
         .height = 720,

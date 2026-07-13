@@ -13,7 +13,7 @@
         },
         .{
             .title = "Chains and ligands",
-            .body = "Color by chain: each polymer gets its own hue, and everything the file called HETATM — ligands, ions, waters — turns amber. That is the first question of any structure paper: what is protein, what is bound to it, and where.\nF filters: heavy atoms only, backbone only, ligands only, one chain at a time.",
+            .body = "Color by chain: each polymer gets its own hue, and everything the file called HETATM — ligands, ions, waters — turns amber. That is the first question of any structure paper: what is protein, what is bound to it, and where.\nS filters: heavy atoms only, backbone only, ligands only, one chain at a time.",
             .preset = "principal (inertia) axes",
             .color = "chains",
             .edge = "all",

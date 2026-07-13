@@ -299,11 +299,13 @@ pub const Hud = struct {
                     1,
                     zrame.Color.rgba(120, 140, 180, 0.35),
                 );
-                var y = drawWrapped(canvas, font, px, top, pw, 15, .bold, zrame.Color.rgba(235, 220, 160, 0.95), pt[0..npt], 20);
-                y += 8;
-                y = drawWrapped(canvas, font, px, y, pw, 13, .regular, zrame.Color.rgba(202, 208, 216, 0.92), pb[0..npb], 18);
+                // Reading sizes, not label sizes: this panel is the paper's prose, and
+                // it is read from a seat, not from the keyboard.
+                var y = drawWrapped(canvas, font, px, top, pw, 19, .bold, zrame.Color.rgba(240, 226, 170, 0.97), pt[0..npt], 26);
                 y += 10;
-                y = drawWrapped(canvas, font, px, y, pw, 12, .regular, zrame.Color.rgba(150, 180, 230, 0.88), pc[0..npc], 16);
+                y = drawWrapped(canvas, font, px, y, pw, 17, .regular, zrame.Color.rgba(216, 222, 232, 0.95), pb[0..npb], 24);
+                y += 12;
+                y = drawWrapped(canvas, font, px, y, pw, 15, .regular, zrame.Color.rgba(160, 190, 240, 0.9), pc[0..npc], 20);
                 // Inline figure: a boxed 2D diagram (weights, root projections).
                 if (npf > 0) {
                     y += 12;
@@ -336,11 +338,11 @@ pub const Hud = struct {
                 );
                 const label = item.label[0..item.len];
                 canvas.drawText(font, lx + 14, ly, label, .{
-                    .size = 13,
+                    .size = 15,
                     .style = .regular,
-                    .color = zrame.Color.rgba(190, 196, 206, 0.9),
+                    .color = zrame.Color.rgba(205, 212, 222, 0.95),
                 });
-                lx += 14 + font.measure(13, .regular, label) + 18;
+                lx += 14 + font.measure(15, .regular, label) + 18;
             }
         }
     }

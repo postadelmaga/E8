@@ -14,7 +14,9 @@ pub const State = struct {
     on: bool = false,
 };
 
-const panel_px: u32 = 300;
+/// Wide enough for the prose to be read at the size it is now set in (19/17/15 px,
+/// see `hud.zig`): a narrower column would wrap the body two words at a time.
+const panel_px: u32 = 380;
 
 pub fn init(a: *App) void {
     D.story(a);

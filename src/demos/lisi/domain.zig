@@ -89,30 +89,32 @@ fn colorOf(comptime mode: e8.ColorMode) *const fn (p: *const Point, hidden_t: f3
 }
 
 const LegendIn = hud_mod.Hud.LegendIn;
+// The legend is a promise: every swatch here is the exact color `e8.rootRgb` paints
+// that class with.
 const legend_physics = [_]LegendIn{
-    .{ .rgb = .{ 89, 191, 255 }, .label = "gravity" },
-    .{ .rgb = .{ 255, 235, 77 }, .label = "electroweak" },
-    .{ .rgb = .{ 158, 140, 217 }, .label = "frame-Higgs" },
-    .{ .rgb = .{ 255, 140, 26 }, .label = "gluon" },
-    .{ .rgb = .{ 191, 140, 115 }, .label = "xΦ boson" },
-    .{ .rgb = .{ 140, 255, 140 }, .label = "lepton" },
-    .{ .rgb = .{ 255, 64, 56 }, .label = "quark r" },
-    .{ .rgb = .{ 64, 255, 77 }, .label = "g" },
-    .{ .rgb = .{ 77, 115, 255 }, .label = "b" },
+    .{ .rgb = .{ 107, 209, 255 }, .label = "gravity" },
+    .{ .rgb = .{ 255, 237, 92 }, .label = "electroweak" },
+    .{ .rgb = .{ 194, 153, 255 }, .label = "frame-Higgs" },
+    .{ .rgb = .{ 255, 153, 46 }, .label = "gluon" },
+    .{ .rgb = .{ 240, 130, 220 }, .label = "xΦ boson" },
+    .{ .rgb = .{ 148, 255, 173 }, .label = "lepton" },
+    .{ .rgb = .{ 255, 82, 77 }, .label = "quark r" },
+    .{ .rgb = .{ 92, 255, 107 }, .label = "g" },
+    .{ .rgb = .{ 117, 163, 255 }, .label = "b" },
 };
 const legend_gen = [_]LegendIn{
-    .{ .rgb = .{ 102, 118, 143 }, .label = "bosons (48)" },
-    .{ .rgb = .{ 77, 255, 115 }, .label = "gen I (64)" },
-    .{ .rgb = .{ 255, 184, 46 }, .label = "gen II (64)" },
-    .{ .rgb = .{ 217, 107, 255 }, .label = "gen III (64)" },
+    .{ .rgb = .{ 168, 189, 219 }, .label = "bosons (48)" },
+    .{ .rgb = .{ 92, 255, 133 }, .label = "gen I (64)" },
+    .{ .rgb = .{ 255, 194, 66 }, .label = "gen II (64)" },
+    .{ .rgb = .{ 240, 128, 255 }, .label = "gen III (64)" },
 };
 const legend_so16 = [_]LegendIn{
-    .{ .rgb = .{ 102, 179, 255 }, .label = "120 adjoint (so(16))" },
-    .{ .rgb = .{ 255, 153, 89 }, .label = "128 spinor (16+)" },
+    .{ .rgb = .{ 117, 194, 255 }, .label = "120 adjoint (so(16))" },
+    .{ .rgb = .{ 255, 168, 102 }, .label = "128 spinor (16+)" },
 };
 const legend_hidden = [_]LegendIn{
-    .{ .rgb = .{ 64, 128, 255 }, .label = "in the view plane" },
-    .{ .rgb = .{ 255, 100, 64 }, .label = "hidden dimensions" },
+    .{ .rgb = .{ 77, 204, 255 }, .label = "in the view plane" },
+    .{ .rgb = .{ 255, 128, 64 }, .label = "hidden dimensions" },
 };
 
 pub const color_modes = &[_]app_mod.ColorModeDef{

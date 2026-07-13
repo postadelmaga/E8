@@ -29,7 +29,9 @@
             .preset = "F4 graviweak plane",
             .color = "generations (triality)",
             .edge = "triality",
-            .cam = .{ 0.40, 0.25, 4.6 },
+            // Head on: the F4 Petrie figure IS its symmetry, and an oblique camera
+            // hides the very 12-fold order the slide is about.
+            .cam = .{ 0.0, 0.0, 4.6 },
             .fig = "f4",
         },
         .{

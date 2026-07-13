@@ -489,9 +489,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 .resident_pages = gpu3d.?.total_pages,
                 .eye = eye,
                 .sun_dir = .{ 0.4, 0.8, 0.45 },
-                // Midpoint of the software path's deep-space gradient, so the
-                // two render paths read as the same scene.
-                .clear_color = .{ 0.039, 0.047, 0.082, 1.0 },
+                // Black, like the software path: a particle is only as visible as
+                // the space behind it is empty, and the old blue-grey deep-space
+                // wash was eating the darkest classes.
+                .clear_color = .{ 0.0, 0.0, 0.0, 1.0 },
                 .shadows = false,
                 .z_near = 0.1,
                 .z_far = 100.0,

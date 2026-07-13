@@ -125,6 +125,12 @@ const Menu = struct {
     /// The wizard finished and the dialog should go away — `createDemo` runs deep
     /// inside the dialog's body and has no `ui` to close it with.
     wizard_done: bool = false,
+    /// A poster asked for the wizard. It cannot open it itself: `openDialog` hashes
+    /// the dialog's name against the CURRENT id scope, and a card runs inside its
+    /// own `pushIdScopeIndex` — so the id it registered was one nothing would ever
+    /// look up again, and the dialog silently never appeared. The request is carried
+    /// out at the root scope instead, where `dialogOpen` will recognize it.
+    wizard_wanted: bool = false,
 
     fn say(m: *Menu, msg: []const u8) void {
         m.note.clearRetainingCapacity();
@@ -860,7 +866,7 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
             const sub = if (cat.asset.len > 0) cat.asset else "nessun file: solo slide";
             if (card(ui, m, slot, artOf(cat.domain), cat.label, sub, false) == .play) {
                 m.cat = ci;
-                ui.openDialog("wizard");
+                m.wizard_wanted = true;
             }
             ui.popIdScope();
             slot += 1;
@@ -879,7 +885,7 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
         if (col == 0) ui.beginRow();
         ui.pushIdScopeIndex(slot);
         if (card(ui, m, slot, .plus, "Nuova demo", "dai un file, esce una presentazione", false) == .play) {
-            ui.openDialog("wizard");
+            m.wizard_wanted = true;
         }
         ui.popIdScope();
         slot += 1;
@@ -887,6 +893,13 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     }
 
     ui.endScroll();
+
+    // Back at the root scope, where the dialog's id means what `wizard()` thinks it
+    // means.
+    if (m.wizard_wanted) {
+        m.wizard_wanted = false;
+        ui.openDialog("wizard");
+    }
 
     if (m.note.items.len > 0) {
         ui.gap(6);

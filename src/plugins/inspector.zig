@@ -24,9 +24,9 @@ const D = app_mod.D;
 
 pub const id = "inspector";
 
-const pop_w: u32 = 620;
-const pop_h: u32 = 780;
-const scene_w: u32 = 560;
+const pop_w: u32 = 700;
+const pop_h: u32 = 860;
+const scene_w: u32 = 640;
 const scene_h: u32 = 380;
 /// zrame centers a `video_fit = .native` frame in the content rect, so the scene
 /// sits in the middle and the two text bands around it are equal: the card reads
@@ -41,8 +41,8 @@ const pad: i32 = 22;
 /// band, which is what keeps long text inside the card instead of spilling over
 /// the scene. (The window itself cannot grow: zrame fixes its size at creation.)
 /// {point size, line height}, largest first.
-const title_steps = .{ .{ 18, 24 }, .{ 16, 21 }, .{ 14, 19 } };
-const body_steps = .{ .{ 15, 21 }, .{ 14, 19 }, .{ 13, 18 }, .{ 12, 16 } };
+const title_steps = .{ .{ 23, 30 }, .{ 20, 26 }, .{ 18, 24 } };
+const body_steps = .{ .{ 19, 26 }, .{ 17, 23 }, .{ 15, 21 }, .{ 14, 19 } };
 
 /// Draw `txt` centered in the band [`band_top`, +`band`], at the largest of
 /// `steps` whose wrapped block fits — the smallest one if none do (a block a

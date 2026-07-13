@@ -573,36 +573,44 @@ pub const ColorMode = enum(u8) {
 /// magnitude of the root's component outside the view basis (0 = fully visible).
 pub fn rootRgb(r: *const Root, mode: ColorMode, hidden_t: f32) [3]f32 {
     switch (mode) {
+        // On BLACK, and told apart at a glance. Two rules hold the palette together:
+        // no class sits below ~0.45 in its brightest channel (a dark point on a dark
+        // background is a point nobody sees), and neighbouring classes are separated
+        // by HUE, not by shade — the eye reads a hue difference across a scene and a
+        // shade difference only side by side.
         .physics => {
             const tint: [3]f32 = switch (r.color) {
-                .red => .{ 1.0, 0.25, 0.22 },
-                .green => .{ 0.25, 1.0, 0.30 },
-                .blue => .{ 0.30, 0.45, 1.0 },
-                .anti_red => .{ 0.20, 0.95, 0.95 },
-                .anti_green => .{ 1.0, 0.35, 1.0 },
-                .anti_blue => .{ 1.0, 0.95, 0.30 },
+                .red => .{ 1.00, 0.32, 0.30 }, // r
+                .green => .{ 0.36, 1.00, 0.42 }, // g
+                .blue => .{ 0.46, 0.64, 1.00 }, // b — lifted: pure blue disappears on black
+                .anti_red => .{ 0.35, 1.00, 0.98 }, // cyan
+                .anti_green => .{ 1.00, 0.46, 1.00 }, // magenta
+                .anti_blue => .{ 1.00, 0.96, 0.45 }, // yellow
                 else => .{ 1, 1, 1 },
             };
             return switch (r.class) {
-                .gravity => .{ 0.35, 0.75, 1.0 },
-                .electroweak => .{ 1.0, 0.92, 0.30 },
-                .frame_higgs => .{ 0.62, 0.55, 0.85 },
-                .gluon => .{ 1.0, 0.55, 0.10 },
-                .color_x => .{ 0.75 * tint[0], 0.55 * tint[1] + 0.15, 0.55 * tint[2] },
-                .lepton => .{ 0.55, 1.0, 0.55 },
+                .gravity => .{ 0.42, 0.82, 1.00 }, // sky
+                .electroweak => .{ 1.00, 0.93, 0.36 }, // yellow
+                .frame_higgs => .{ 0.76, 0.60, 1.00 }, // violet (was a muted grey-purple)
+                .gluon => .{ 1.00, 0.60, 0.18 }, // orange
+                // The xΦ keeps the color charge of its Higgs, but as a PINK family:
+                // brown-orange put it right on top of the gluons.
+                .color_x => .{ 0.55 + 0.45 * tint[0], 0.30 + 0.30 * tint[1], 0.62 + 0.38 * tint[2] },
+                .lepton => .{ 0.58, 1.00, 0.68 }, // mint
                 .quark => tint,
             };
         },
         .generation => return switch (r.gen) {
-            1 => .{ 0.30, 1.0, 0.45 },
-            2 => .{ 1.0, 0.72, 0.18 },
-            3 => .{ 0.85, 0.42, 1.0 },
-            else => .{ 0.40, 0.46, 0.56 },
+            1 => .{ 0.36, 1.00, 0.52 }, // spring green
+            2 => .{ 1.00, 0.76, 0.26 }, // amber
+            3 => .{ 0.94, 0.50, 1.00 }, // magenta
+            else => .{ 0.66, 0.74, 0.86 }, // bosons: a bright slate, not a dark one
         },
-        .so16 => return if (r.integer) .{ 0.40, 0.70, 1.0 } else .{ 1.0, 0.60, 0.35 },
+        .so16 => return if (r.integer) .{ 0.46, 0.76, 1.00 } else .{ 1.00, 0.66, 0.40 },
         .hidden => {
             const t = std.math.clamp(hidden_t, 0, 1);
-            return .{ 0.15 + 0.85 * t, 0.35 + 0.25 * (1 - t), 1.0 - 0.75 * t };
+            // Cyan (in the plane) → warm orange (hidden), both fully lit.
+            return .{ 0.30 + 0.70 * t, 0.80 - 0.30 * t, 1.00 - 0.75 * t };
         },
     }
 }

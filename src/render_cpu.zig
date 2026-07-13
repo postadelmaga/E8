@@ -39,19 +39,17 @@ pub const Cpu = struct {
         self.h = h;
     }
 
-    /// Deep-space vertical gradient, fully opaque.
+    /// Black, fully opaque. The old deep-space gradient was a pretty blue, and it
+    /// cost contrast on every dark particle in the scene: on black nothing competes
+    /// with the points.
     pub fn clear(self: *Cpu) void {
         for (0..self.h) |y| {
-            const t: f32 = @as(f32, @floatFromInt(y)) / @as(f32, @floatFromInt(self.h));
-            const r: u8 = @intFromFloat(7.0 + 6.0 * t);
-            const g: u8 = @intFromFloat(8.0 + 8.0 * t);
-            const b: u8 = @intFromFloat(14.0 + 14.0 * t);
             const row = self.fb[y * self.w * 4 ..][0 .. self.w * 4];
             var x: usize = 0;
             while (x < row.len) : (x += 4) {
-                row[x] = r;
-                row[x + 1] = g;
-                row[x + 2] = b;
+                row[x] = 0;
+                row[x + 1] = 0;
+                row[x + 2] = 0;
                 row[x + 3] = 255;
             }
         }

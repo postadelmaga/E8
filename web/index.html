@@ -44,6 +44,16 @@
 </div>
 <div id="hint">Press <b>P</b> to start the paper · <b>H</b> for every key · drag to orbit, click a root</div>
 <div id="err"></div>
+<!-- Umami, self-hosted sullo stesso server: chi apre la demo, da dove, con che
+     browser — e nient'altro. Nessun cookie e nessun identificatore persistente,
+     quindi nessun banner di consenso davanti alla figura.
+     Servito da questo stesso origin (/stats/): un tracker di terze parti è la
+     prima cosa che un ad-blocker taglia, e questo non lo è.
+     `data-host-url` è obbligatorio: senza, il tracker dedurrebbe l'endpoint
+     dall'origin dello script (…/api/send, dove c'è la demo) invece che da /stats. -->
+<script defer src="/stats/script.js"
+        data-website-id="ef83c292-ef77-4a08-8f26-ea1b0247cb56"
+        data-host-url="https://e8-zdemo.duckdns.org/stats"></script>
 <script type="module">
 // The interactive paper, in a tab. The wasm module IS the app — the same domain,
 // plugins and software rasterizer the native build runs (src/web.zig). This

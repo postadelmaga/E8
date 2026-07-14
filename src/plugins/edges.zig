@@ -22,10 +22,24 @@ pub const State = struct {
 
 pub fn init(a: *App) void {
     const st = a.pluginState(@This());
+    // All or nothing: a half-built table would leave `edgePairs` indexing into
+    // slices that were never filled. On any failure the state reverts to empty
+    // and the relation modes simply fall back to the lattice edges.
     st.rel_buf = a.gpa.alloc([]([2]u16), a.rel.len) catch return;
-    st.rel_len = a.gpa.alloc(usize, a.rel.len) catch return;
+    st.rel_len = a.gpa.alloc(usize, a.rel.len) catch {
+        a.gpa.free(st.rel_buf);
+        st.rel_buf = &.{};
+        return;
+    };
     for (a.rel, 0..) |table, r| {
-        st.rel_buf[r] = a.gpa.alloc([2]u16, a.count()) catch return;
+        st.rel_buf[r] = a.gpa.alloc([2]u16, a.count()) catch {
+            for (st.rel_buf[0..r]) |buf| a.gpa.free(buf);
+            a.gpa.free(st.rel_buf);
+            a.gpa.free(st.rel_len);
+            st.rel_buf = &.{};
+            st.rel_len = &.{};
+            return;
+        };
         var cnt: usize = 0;
         for (table, 0..) |j, i| {
             if (j != i) {
@@ -42,6 +56,20 @@ pub fn deinit(a: *App) void {
     for (st.rel_buf) |buf| a.gpa.free(buf);
     if (st.rel_buf.len > 0) a.gpa.free(st.rel_buf);
     if (st.rel_len.len > 0) a.gpa.free(st.rel_len);
+    st.rel_buf = &.{};
+    st.rel_len = &.{};
+}
+
+/// A new point system (a slide changed the data): the link lists are the old
+/// system's, and they are indexed by point.
+pub fn reload(a: *App) void {
+    const st = a.pluginState(@This());
+    const mode = st.mode;
+    deinit(a);
+    init(a);
+    // Keep the mode the presenter chose — unless it named a relation this
+    // system does not have as many of.
+    st.mode = if (mode >= 3 and mode - 3 >= st.rel_buf.len) 2 else mode;
 }
 
 pub fn setByName(a: *App, name: []const u8) void {
@@ -77,7 +105,8 @@ pub fn edgePairs(a: *App) []const [2]u16 {
     if (st.mode == 0) return &.{};
     if (st.mode >= 3) {
         const r = st.mode - 3;
-        return st.rel_buf[r][0..st.rel_len[r]];
+        if (r < st.rel_buf.len) return st.rel_buf[r][0..st.rel_len[r]];
+        // init failed (OOM): the relation tables don't exist — show the lattice.
     }
     return a.edges;
 }

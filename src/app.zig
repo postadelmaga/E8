@@ -27,6 +27,7 @@ const hud_mod = @import("hud.zig");
 const domain = @import("domain.zig");
 const descriptor = @import("descriptor.zig");
 const render_gpu = @import("render_gpu.zig");
+const still_mod = @import("still.zig");
 
 /// The active domain package (see src/domain.zig).
 pub const D = domain.D;
@@ -193,6 +194,26 @@ pub fn storeF32(a: *std.atomic.Value(u32), v: f32) void {
     a.store(@bitCast(v), .monotonic);
 }
 
+/// The camera atomics have TWO writers — the window thread (drag, scroll) and
+/// the render thread (spin, kiosk easing) — so a load→modify→store pair loses
+/// whichever update lands between the load and the store. Relative updates go
+/// through these CAS loops instead; absolute sets can keep `storeF32`.
+pub fn addClampF32(a: *std.atomic.Value(u32), d: f32, lo: f32, hi: f32) void {
+    var old = a.load(.monotonic);
+    while (true) {
+        const new: u32 = @bitCast(std.math.clamp(@as(f32, @bitCast(old)) + d, lo, hi));
+        old = a.cmpxchgWeak(old, new, .monotonic, .monotonic) orelse return;
+    }
+}
+
+pub fn mulClampF32(a: *std.atomic.Value(u32), m: f32, lo: f32, hi: f32) void {
+    var old = a.load(.monotonic);
+    while (true) {
+        const new: u32 = @bitCast(std.math.clamp(@as(f32, @bitCast(old)) * m, lo, hi));
+        old = a.cmpxchgWeak(old, new, .monotonic, .monotonic) orelse return;
+    }
+}
+
 var key_ring: [32]u32 = undefined;
 var key_head: std.atomic.Value(u32) = .init(0);
 var key_tail: std.atomic.Value(u32) = .init(0);
@@ -239,6 +260,10 @@ pub const App = struct {
     basis: geom.Basis,
     preset: u32 = 0,
     reset_camera: bool = false,
+    /// Re-orthonormalize the basis every frame (drift correction for the
+    /// incremental rotations). A plugin that deliberately scales the basis —
+    /// the Big Bang's Kasner shear — turns it off while its mode runs.
+    renorm_basis: bool = true,
 
     // Per-frame data, one entry per point (allocated by `initTables`).
     dt: f32 = 0,
@@ -255,6 +280,19 @@ pub const App = struct {
     reserve_w: u32 = 0,
     status_dirty: bool = true,
     info_dirty: bool = true,
+
+    /// The picture a slide put on screen, if any: while it is set the still IS
+    /// the frame and the 3D scene is not drawn (src/still.zig). Owned by the
+    /// slides plugin.
+    still: ?*const still_mod.Still = null,
+    /// The file the point system currently comes from, when a slide changed it
+    /// (owned). Empty means "still the one the demo was opened with".
+    source: []u8 = &.{},
+    /// The file on the command line — what `source` falls back to.
+    opened_with: []const u8 = "",
+    /// Raised by `reloadPoints`: the point count changed under the renderer, so
+    /// main.zig must re-size the buffers it allocated for the old one.
+    points_changed: bool = false,
 
     state: PluginStates = .{},
 
@@ -287,6 +325,13 @@ pub const App = struct {
         a.vis = try a.gpa.alloc(bool, np);
         a.visuals = try a.gpa.alloc(Visual, np);
         @memset(a.vis, false);
+        // `post` hooks (the point card's neighbourhood map) read the visuals of the
+        // frame before theirs — on the first frame there isn't one.
+        @memset(a.visuals, .{});
+        // The depth sort walks EVERY index, visible or not: garbage z (a NaN,
+        // in particular) would hand pdq a comparator that is not a strict weak
+        // order.
+        @memset(a.scr, .{ 0, 0, 0 });
 
         var deg = try a.gpa.alloc(u32, np);
         defer a.gpa.free(deg);
@@ -313,6 +358,88 @@ pub const App = struct {
         }
     }
 
+    /// The file the points on screen came from.
+    pub fn sourceName(a: *const App) []const u8 {
+        return if (a.source.len > 0) a.source else a.opened_with;
+    }
+
+    /// Read `file` into the point system and rebuild everything sized by it.
+    /// Assumes the previous system is already gone (see `reloadPoints`).
+    fn install(a: *App, file: []const u8) !void {
+        const owned = try a.gpa.dupe(u8, file);
+        errdefer a.gpa.free(owned);
+        // The domain takes its path from the command line — that was the only
+        // place a file could come from until a slide could name one.
+        cli.file = owned;
+
+        const points = try D.load(a.gpa, a.io);
+        errdefer unloadPoints(a.gpa, points);
+        const edges = try D.buildEdges(a.gpa, points);
+        errdefer a.gpa.free(edges);
+        a.points = points;
+        a.edges = edges;
+        try a.initTables();
+
+        if (a.source.len > 0) a.gpa.free(a.source);
+        a.source = owned;
+    }
+
+    /// Swap the point system for the one in `file` — the same domain reading a
+    /// different molecule, a different catalog. This is what a slide's `.data`
+    /// does, and it is more than a convenience: a deck that can change what it is
+    /// looking at, between slides, in one window, is the difference between a
+    /// demo and a talk.
+    ///
+    /// Everything sized by the point count is rebuilt: the framework's tables
+    /// here, each plugin's in its `reload` hook, the renderer's buffers in
+    /// main.zig (which watches `points_changed`). The selection cannot survive —
+    /// point 71 of a caffeine molecule is not point 71 of a protein.
+    ///
+    /// A domain keeps ONE table (`load`/`unload` are a singleton), so the old
+    /// system must go before the new one is read: there is no instant where both
+    /// exist. A file that then fails to load would leave an empty window — so the
+    /// previous file goes back, and that one is known to load, because it is what
+    /// was on screen a moment ago.
+    pub fn reloadPoints(a: *App, file: []const u8) !void {
+        if (comptime !@hasDecl(D, "load")) return error.DomainGeneratesItsPoints;
+        if (std.mem.eql(u8, a.sourceName(), file)) return; // already showing it
+
+        var prev_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const prev_name = a.sourceName();
+        if (prev_name.len > prev_buf.len) return error.NameTooLong;
+        const prev = prev_buf[0..prev_name.len];
+        @memcpy(prev, prev_name);
+
+        a.selected = -1;
+        a.info_dirty = true;
+        a.deinitTables();
+        unloadPoints(a.gpa, a.points);
+        a.gpa.free(a.edges);
+        a.points = &.{};
+        a.edges = &.{};
+
+        install(a, file) catch |e| {
+            install(a, prev) catch |e2| {
+                std.debug.print(
+                    "the deck asked for \"{s}\" ({s}), and \"{s}\" will not load back ({s}) — nothing left to show\n",
+                    .{ file, @errorName(e), prev, @errorName(e2) },
+                );
+                std.process.exit(1);
+            };
+            a.points_changed = true;
+            dispatchReload(a);
+            return e;
+        };
+        a.points_changed = true;
+        a.status_dirty = true;
+        dispatchReload(a);
+    }
+
+    pub fn deinitSource(a: *App) void {
+        if (a.source.len > 0) a.gpa.free(a.source);
+        a.source = &.{};
+    }
+
     pub fn deinitTables(a: *App) void {
         for (a.rel) |t| a.gpa.free(t);
         a.gpa.free(a.rel);
@@ -337,6 +464,16 @@ pub fn dispatchInit(a: *App) void {
 pub fn dispatchDeinit(a: *App) void {
     inline for (plugin_list) |P| {
         if (comptime @hasDecl(P, "deinit")) P.deinit(a);
+    }
+}
+
+/// The point system was replaced (`reloadPoints`): a plugin holding anything
+/// sized by the point count — a per-point mask, a per-relation link list —
+/// rebuilds it here. A plugin with no such state does not implement the hook and
+/// pays nothing.
+pub fn dispatchReload(a: *App) void {
+    inline for (plugin_list) |P| {
+        if (comptime @hasDecl(P, "reload")) P.reload(a);
     }
 }
 
@@ -388,7 +525,7 @@ pub fn buildStatus(a: *App, buf: []u8) []const u8 {
     var len: usize = 0;
     inline for (plugin_list) |P| {
         if (comptime @hasDecl(P, "status")) {
-            var tmp: [96]u8 = undefined;
+            var tmp: [128]u8 = undefined;
             const s = P.status(a, &tmp);
             if (s.len > 0 and len + s.len + sep.len <= buf.len) {
                 if (len > 0) {

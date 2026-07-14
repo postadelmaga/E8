@@ -51,7 +51,7 @@ pub const help: u32 = 35; // H
 
 // Left free for the domains, and spoken for in exactly one domain each:
 pub const domain_g: u32 = 34; // G
-pub const domain_h: u32 = 36; // J — the hub climb (H is the help now)
+pub const domain_j: u32 = 36; // J (was named domain_h before H became the help)
 pub const domain_n: u32 = 49; // N
 pub const domain_m: u32 = 50; // M
 pub const domain_b: u32 = 48; // B
@@ -73,9 +73,9 @@ pub const help_rows = [_]Row{
     .{ .keys = "K", .what = "kiosk: the slides advance on their own" },
     .{ .keys = "F", .what = "fullscreen (F11 too)" },
     .{ .keys = "H", .what = "this list" },
-    .{ .keys = "Esc", .what = "close the top layer: popup, then panel, then the app" },
+    .{ .keys = "Esc", .what = "close the top layer: card, then panel, then the app" },
     .{ .keys = "drag / scroll", .what = "orbit the camera / zoom" },
-    .{ .keys = "click", .what = "pick a point — opens the inspector" },
+    .{ .keys = "click", .what = "pick a point — its card opens (click it again, or empty space, to clear)" },
     .{ .keys = "1 … 9", .what = "projection presets" },
     .{ .keys = "←  →", .what = "rotate the hidden plane (or sweep an animated preset)" },
     .{ .keys = "Tab", .what = "which hidden plane the arrows turn" },

@@ -3,11 +3,21 @@
 //! the same file is re-read from disk on F5 for hot reload while authoring.
 
 const std = @import("std");
+const hud_mod = @import("hud.zig");
 
 pub const Slide = struct {
     title: []const u8,
     body: []const u8,
     cite: []const u8 = "",
+    /// A picture, instead of the figure: the image takes the scene's frame and
+    /// the panel keeps narrating beside it (see src/still.zig). Empty = the
+    /// scene, as always.
+    image: []const u8 = "",
+    /// The FILE this slide's points come from — a different molecule, a different
+    /// catalog — for a domain that reads one. Empty = whatever the demo was
+    /// opened with, unchanged. Switching costs a reload of the point system, so
+    /// it happens only when the name actually differs from what is loaded.
+    data: []const u8 = "",
     /// Names resolved against the domain's tables at show time.
     preset: []const u8,
     color: []const u8 = "",
@@ -40,19 +50,47 @@ pub fn deinit(gpa: std.mem.Allocator, d: Deck) void {
     std.zon.parse.free(gpa, d);
 }
 
+/// What `loadEx` has to say about where the deck came from — the caller (F5,
+/// startup) surfaces it on the HUD, because a hand-edited deck that silently
+/// reverts to the embedded slides looks like the edit was ignored.
+pub const Loaded = struct {
+    deck: Deck,
+    /// Set when `path` existed but would not parse (the embedded deck plays).
+    parse_err: ?anyerror = null,
+};
+
 /// Load `path` from the working directory, falling back to the embedded
 /// default. The returned deck is owned by the caller (free with `deinit`).
 pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, embedded: [:0]const u8) Deck {
+    return loadEx(gpa, io, path, embedded).deck;
+}
+
+pub fn loadEx(gpa: std.mem.Allocator, io: std.Io, path: []const u8, embedded: [:0]const u8) Loaded {
     if (std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1 << 20))) |bytes| {
         defer gpa.free(bytes);
-        const z = gpa.dupeZ(u8, bytes) catch return parseOrEmpty(gpa, embedded);
+        const z = gpa.dupeZ(u8, bytes) catch return .{ .deck = parseOrEmpty(gpa, embedded) };
         defer gpa.free(z);
         if (parse(gpa, z)) |d| {
             std.debug.print("deck: loaded {s} ({d} slides)\n", .{ path, d.slides.len });
-            return d;
-        } else |e| std.debug.print("deck: {s} unparsable ({s}) — using embedded\n", .{ path, @errorName(e) });
+            warnLongBodies(path, d);
+            return .{ .deck = d };
+        } else |e| {
+            std.debug.print("deck: {s} unparsable ({s}) — using embedded\n", .{ path, @errorName(e) });
+            return .{ .deck = parseOrEmpty(gpa, embedded), .parse_err = e };
+        }
     } else |_| {}
-    return parseOrEmpty(gpa, embedded);
+    return .{ .deck = parseOrEmpty(gpa, embedded) };
+}
+
+/// The panel cuts a body at `hud.panel_body_max` (with a visible mark) — tell
+/// the author at load time, when it can still be fixed before the talk.
+fn warnLongBodies(path: []const u8, d: Deck) void {
+    for (d.slides, 0..) |s, i| {
+        if (s.body.len > hud_mod.panel_body_max) std.debug.print(
+            "deck: {s} slide {d} (\"{s}\") body is {d} bytes — the panel shows the first {d}\n",
+            .{ path, i + 1, s.title, s.body.len, hud_mod.panel_body_max },
+        );
+    }
 }
 
 fn parseOrEmpty(gpa: std.mem.Allocator, embedded: [:0]const u8) Deck {

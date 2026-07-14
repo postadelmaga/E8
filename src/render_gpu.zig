@@ -200,7 +200,12 @@ pub const Gpu3d = struct {
         // Page bytes stay resident: every view uploads them into its raster.
         self.page_bytes = try gpa.alloc([]u8, self.total_pages);
         errdefer gpa.free(self.page_bytes);
-        for (0..self.total_pages) |p| self.page_bytes[p] = try archive.readPageAlloc(gpa, @intCast(p));
+        var loaded: usize = 0;
+        errdefer for (self.page_bytes[0..loaded]) |pb| gpa.free(pb);
+        for (0..self.total_pages) |p| {
+            self.page_bytes[p] = try archive.readPageAlloc(gpa, @intCast(p));
+            loaded = p + 1;
+        }
         return self;
     }
 

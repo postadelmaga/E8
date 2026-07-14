@@ -80,6 +80,10 @@ pub fn toStringAlloc(gpa: std.mem.Allocator, d: deck.Deck) ![]u8 {
         try field(&out, gpa, "title", s.title);
         try field(&out, gpa, "body", s.body);
         if (s.cite.len > 0) try field(&out, gpa, "cite", s.cite);
+        // What the slide LOOKS AT: a picture instead of the scene, and the file
+        // the points come from. Both absent = the scene, as the demo was opened.
+        if (s.image.len > 0) try field(&out, gpa, "image", s.image);
+        if (s.data.len > 0) try field(&out, gpa, "data", s.data);
         try field(&out, gpa, "preset", s.preset);
         if (s.color.len > 0) try field(&out, gpa, "color", s.color);
         // "all" is what an absent edge mode means, so only a slide that departs
@@ -139,6 +143,13 @@ test "a deck survives the round trip: parse -> write -> parse" {
         \\            .fig = "levels",
         \\        },
         \\        .{
+        \\            .title = "A picture, and a different molecule",
+        \\            .body = "The slide that looks at something else.",
+        \\            .image = "figures/detector.png",
+        \\            .data = "molecules/caffeine.pdb",
+        \\            .preset = "E8 core",
+        \\        },
+        \\        .{
         \\            .title = "A slide that leans on every default",
         \\            .body = "No cite, no color, no filter, no fig, no cam, edge stays all, dwell stays 22.",
         \\            .preset = "E8 core",
@@ -163,6 +174,8 @@ test "a deck survives the round trip: parse -> write -> parse" {
         try testing.expectEqualStrings(x.title, y.title);
         try testing.expectEqualStrings(x.body, y.body);
         try testing.expectEqualStrings(x.cite, y.cite);
+        try testing.expectEqualStrings(x.image, y.image);
+        try testing.expectEqualStrings(x.data, y.data);
         try testing.expectEqualStrings(x.preset, y.preset);
         try testing.expectEqualStrings(x.color, y.color);
         try testing.expectEqualStrings(x.filter, y.filter);

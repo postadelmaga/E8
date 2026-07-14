@@ -79,7 +79,7 @@ pub const plugins = .{ … };                       // which framework plugins t
 pub fn descriptor(a, i) descriptor.Object         // how point i looks and behaves
 pub fn describe(a, i, buf) []const u8             // HUD one-liner
 pub fn story(a) void                              // side-panel page for the selection
-pub fn inspect(a, i, tbuf, bbuf) InspectText      // popup text
+pub fn inspect(a, i, tbuf, bbuf) InspectText      // the point card's text
 pub fn figure(a, fig_id, dots) usize              // inline panel diagram
 pub fn exportCsv(a) !void                         // X
 
@@ -119,8 +119,8 @@ the k-nearest-neighbor graph and the principal axes, and ships a deck that
 explains what it just did to the reader.
 
 ```
-zig build -Ddemo=data run -- iris.csv
-zig build -Ddemo=data run -- vecs.tsv --coords=x,y,z,w --class=label --knn=8
+zig build run-demo -Ddemo=data -- iris.csv
+zig build run-demo -Ddemo=data -- vecs.tsv --coords=x,y,z,w --class=label --knn=8
 ```
 
 ### Field profiles — the domains a working scientist opens
@@ -148,10 +148,10 @@ graph out on its own Laplacian eigenvectors, so "rotate the hidden dimensions
 into view" *is* walking up the spectrum.
 
 ```
-zig build -Ddemo=embed run -- vectors.npy --label=names.txt --knn=8
-zig build -Ddemo=chem  run -- 1ubq.pdb
-zig build -Ddemo=graph run -- karate.txt
-zig build -Ddemo=astro run -- gaia.csv
+zig build run-demo -Ddemo=embed -- vectors.npy --label=names.txt --knn=8
+zig build run-demo -Ddemo=chem  -- 1ubq.pdb
+zig build run-demo -Ddemo=graph -- karate.txt
+zig build run-demo -Ddemo=astro -- gaia.csv
 ```
 
 ### Object descriptors — how things look
@@ -177,16 +177,14 @@ the software path draws equivalent additive halos. `"gluon → orange emissive,
 breathing"` and `"purine core → warm tint, breathing"` are written the same way.
 
 `render_gpu.zig` owns one zengine **device** (Vulkan + the baked sphere/tube
-meshes) and hands out **views** — a raster plus export images per window. The
-main window takes one with `--gpu`; the inspector popup always takes one, so
-its mini-scene is zengine-rendered even while the main window is on the
-software path, and a main-window resize rebuilds only its own view.
+meshes) and hands out **views** — a raster plus export images. The main window
+takes one with `--gpu`; a resize rebuilds only that view.
 
 #### A mesh of the domain's own
 
 The framework bakes two meshes and knows what they are for: a sphere per point, a
 tube per edge. Beyond that it has no opinions, so a domain may hand over meshes of
-its own and place them in the inspector's scene:
+its own; they are placed in THE scene, around the selected point (`--gpu` only):
 
 ```zig
 pub const extra_parts = 25;                                  // how many, so instances can be sized
@@ -271,9 +269,8 @@ the framework is Lisi-specific.
 
 A relation is a partner map over the points — Lisi's triality (a 3-cycle), the
 24-cell's antipode (an involution), a molecule's backbone walk. The framework
-tabulates it once, offers it as an edge mode, lights it in the inspector's
-mini-scene, and flares it around the selection. An action binds a key to a
-domain verb:
+tabulates it once, offers it as an edge mode, and flares it around the
+selection (the lighthouse). An action binds a key to a domain verb:
 
 ```zig
 pub const relations = &[_]app_mod.RelationDef{
@@ -296,7 +293,7 @@ pub const actions = &[_]app_mod.ActionDef{
    names.
 4. Add your name to the switch in `src/domain.zig` and to the `-Ddemo` help
    text in `build.zig`.
-5. `zig build -Ddemo=mine run`. Press `P`. Edit `deck.zon`, press `F5`.
+5. `zig build run-demo -Ddemo=mine`. Press `P`. Edit `deck.zon`, press `F5`.
 
 The molecule domain is ~300 lines including all its prose — that is the real
 cost of a new interactive paper.

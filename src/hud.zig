@@ -33,6 +33,15 @@ pub const LegendItem = struct {
 /// normalized coordinates: x, y ∈ [-1, 1], y up.
 pub const FigDot = struct { x: f32, y: f32, rgb: [3]u8 };
 
+/// How much slide/story prose the side panel can hold. A longer body is cut at
+/// a UTF-8 boundary and marked with an ellipsis (see `setPanel`); deck loading
+/// warns about it, so an author finds out at F5 time, not mid-talk.
+pub const panel_body_max: usize = 2048;
+
+/// One dot of the point card's little diagram — same normalized coordinates as
+/// `FigDot`, with a size and an alpha, so a domain can sketch a neighbourhood.
+pub const CardDot = struct { x: f32, y: f32, r: f32, rgb: [3]u8, a: f32 = 1.0 };
+
 pub const Hud = struct {
     /// Wired AFTER `Window.init` returns (init dispatches an initial redraw).
     win: ?*zrame.Window = null,
@@ -55,7 +64,7 @@ pub const Hud = struct {
     ema_ms: f32 = 0,
 
     lock: Spin = .{},
-    line1: [160]u8 = undefined,
+    line1: [256]u8 = undefined,
     len1: usize = 0,
     line2: [200]u8 = undefined,
     len2: usize = 0,
@@ -63,12 +72,26 @@ pub const Hud = struct {
     n_legend: usize = 0,
     p_title: [96]u8 = undefined,
     p_title_len: usize = 0,
-    p_body: [720]u8 = undefined,
+    p_body: [panel_body_max]u8 = undefined,
     p_body_len: usize = 0,
     p_cite: [256]u8 = undefined,
     p_cite_len: usize = 0,
     p_fig: [72]FigDot = undefined,
     p_fig_len: usize = 0,
+
+    /// The point card: what you get when you click a point. It used to be a second
+    /// TOPLEVEL WINDOW — a popup opening and closing on every click, which is a
+    /// window transition where the user asked a question about a dot. Now it is a
+    /// card drawn on this window's own glass, over the scene: no new surface, no
+    /// second render path, no focus change. Written by the inspector plugin when
+    /// the selection changes; the HUD only draws it.
+    card_on: std.atomic.Value(bool) = .init(false),
+    card_title: [96]u8 = undefined,
+    card_title_len: usize = 0,
+    card_body: [512]u8 = undefined,
+    card_body_len: usize = 0,
+    card_dots: [72]CardDot = undefined,
+    card_dots_len: usize = 0,
 
     /// The shortcut card (H). Its text is built once, at startup, from `keys.zig`
     /// and the domain's own actions — the HUD only draws it.
@@ -123,8 +146,19 @@ pub const Hud = struct {
         defer self.lock.unlock();
         self.p_title_len = @min(title.len, self.p_title.len);
         @memcpy(self.p_title[0..self.p_title_len], title[0..self.p_title_len]);
-        self.p_body_len = @min(body.len, self.p_body.len);
-        @memcpy(self.p_body[0..self.p_body_len], body[0..self.p_body_len]);
+        if (body.len <= self.p_body.len) {
+            self.p_body_len = body.len;
+            @memcpy(self.p_body[0..body.len], body);
+        } else {
+            // Cut at a UTF-8 boundary and say so — silent truncation once ate
+            // half a slide mid-sentence.
+            const mark = " […]";
+            var n = self.p_body.len - mark.len;
+            while (n > 0 and (body[n] & 0xC0) == 0x80) n -= 1;
+            @memcpy(self.p_body[0..n], body[0..n]);
+            @memcpy(self.p_body[n..][0..mark.len], mark);
+            self.p_body_len = n + mark.len;
+        }
         self.p_cite_len = @min(cite.len, self.p_cite.len);
         @memcpy(self.p_cite[0..self.p_cite_len], cite[0..self.p_cite_len]);
         self.p_fig_len = 0; // a new panel page clears the figure
@@ -138,6 +172,29 @@ pub const Hud = struct {
         defer self.lock.unlock();
         self.p_fig_len = @min(dots.len, self.p_fig.len);
         @memcpy(self.p_fig[0..self.p_fig_len], dots[0..self.p_fig_len]);
+    }
+
+    /// The point card's content. `dots` is optional (a domain diagram of the
+    /// selection's neighbourhood); pass an empty slice for text only.
+    pub fn setCard(self: *Hud, title: []const u8, body: []const u8, dots: []const CardDot) void {
+        defer self.dirty();
+        self.lock.lock();
+        defer self.lock.unlock();
+        self.card_title_len = @min(title.len, self.card_title.len);
+        @memcpy(self.card_title[0..self.card_title_len], title[0..self.card_title_len]);
+        self.card_body_len = @min(body.len, self.card_body.len);
+        @memcpy(self.card_body[0..self.card_body_len], body[0..self.card_body_len]);
+        self.card_dots_len = @min(dots.len, self.card_dots.len);
+        @memcpy(self.card_dots[0..self.card_dots_len], dots[0..self.card_dots_len]);
+    }
+
+    pub fn setCardOn(self: *Hud, on: bool) void {
+        if (self.card_on.swap(on, .monotonic) == on) return;
+        self.dirty();
+    }
+
+    pub fn cardOn(self: *const Hud) bool {
+        return self.card_on.load(.monotonic);
     }
 
     /// The shortcut card's text (rows of "keys\tdescription") and the always-on
@@ -259,11 +316,11 @@ pub const Hud = struct {
         const fps_str = std.fmt.bufPrint(&fbuf, "{d:.0} FPS", .{fps}) catch return;
 
         // Snapshot under the spinlock; skip a frame of detail rather than block.
-        var l1: [160]u8 = undefined;
+        var l1: [256]u8 = undefined;
         var l2: [200]u8 = undefined;
         var leg: [10]LegendItem = undefined;
         var pt: [96]u8 = undefined;
-        var pb: [720]u8 = undefined;
+        var pb: [panel_body_max]u8 = undefined;
         var pc: [256]u8 = undefined;
         var pf: [72]FigDot = undefined;
         var n1: usize = 0;
@@ -411,10 +468,124 @@ pub const Hud = struct {
             });
         }
 
+        // The point card, on the left of the scene: the click's answer, in this
+        // window. (Drawn before the help card, which is the layer above it.)
+        if (self.card_on.load(.monotonic)) {
+            var ct: [96]u8 = undefined;
+            var cb: [512]u8 = undefined;
+            var cd: [72]CardDot = undefined;
+            var nct: usize = 0;
+            var ncb: usize = 0;
+            var ncd: usize = 0;
+            if (self.lock.tryLock()) {
+                nct = self.card_title_len;
+                ncb = self.card_body_len;
+                ncd = self.card_dots_len;
+                @memcpy(ct[0..nct], self.card_title[0..nct]);
+                @memcpy(cb[0..ncb], self.card_body[0..ncb]);
+                @memcpy(cd[0..ncd], self.card_dots[0..ncd]);
+                self.lock.unlock();
+            }
+            if (nct > 0) drawCard(canvas, font, content, ct[0..nct], cb[0..ncb], cd[0..ncd]);
+        }
+
         // The shortcut card (H): every key this build binds, the domain's own
         // actions included — built from `keys.zig`, so it cannot drift from what the
         // plugins actually do.
         if (nh > 0 and self.help_on.load(.monotonic)) drawHelp(canvas, font, content, hbuf[0..nh]);
+    }
+
+    /// The point card: a glass panel on the left of the content, sized to its own
+    /// text. It sits OVER the scene rather than beside it — the scene keeps its
+    /// width, nothing reflows, and closing the card puts the picture back exactly
+    /// as it was.
+    fn drawCard(
+        canvas: *zrame.Canvas,
+        font: anytype,
+        content: zrame.Rect,
+        title: []const u8,
+        body: []const u8,
+        dots: []const CardDot,
+    ) void {
+        const pad: i32 = 18;
+        const w: i32 = @min(@as(i32, @intCast(content.w)) - 32, 340);
+        if (w < 200) return; // a card this narrow would be a smear, not a card
+        const tw = w - 2 * pad;
+
+        const th = wrappedHeight(font, tw, 18, .bold, title, 24);
+        const bh = wrappedHeight(font, tw, 15, .regular, body, 21);
+        const fig: i32 = if (dots.len > 0) @divTrunc(tw, 2) + 12 else 0;
+        const h = pad + th + 10 + fig + bh + pad + 18;
+
+        const x: i32 = @as(i32, @intCast(content.x)) + 16;
+        const y: i32 = @as(i32, @intCast(content.y)) +
+            @max(78, @divTrunc(@as(i32, @intCast(content.h)) - h, 2));
+
+        canvas.fillRoundedRect(
+            @floatFromInt(x),
+            @floatFromInt(y),
+            @floatFromInt(w),
+            @floatFromInt(h),
+            14,
+            zrame.Color.rgba(15, 16, 26, 0.93),
+        );
+        canvas.strokeRoundedRect(
+            @floatFromInt(x),
+            @floatFromInt(y),
+            @floatFromInt(w),
+            @floatFromInt(h),
+            14,
+            1,
+            zrame.Color.rgba(120, 140, 180, 0.35),
+        );
+
+        const tx = x + pad;
+        var ty = y + pad + 18;
+        ty = drawWrapped(canvas, font, tx, ty, tw, 18, .bold, zrame.Color.rgba(240, 226, 170, 0.97), title, 24);
+        ty += 10;
+        if (dots.len > 0) {
+            // The neighbourhood map. By the card's contract `dots[0]` is the point
+            // itself and every other dot is joined to it, so the links are drawn
+            // from the first — no second array to keep in step with this one.
+            const fx: f32 = @floatFromInt(tx);
+            const fy: f32 = @floatFromInt(ty);
+            const fw: f32 = @floatFromInt(tw);
+            const fh: f32 = @floatFromInt(fig - 12);
+            canvas.fillRoundedRect(fx, fy, fw, fh, 8, zrame.Color.rgba(8, 10, 18, 0.75));
+            const place = struct {
+                fn atX(d: CardDot, ox: f32, box_w: f32) f32 {
+                    return ox + (d.x * 0.44 + 0.5) * box_w;
+                }
+                fn atY(d: CardDot, oy: f32, box_h: f32) f32 {
+                    return oy + (0.5 - d.y * 0.44) * box_h;
+                }
+            };
+            const c0x = place.atX(dots[0], fx, fw);
+            const c0y = place.atY(dots[0], fy, fh);
+            for (dots[1..]) |d| {
+                canvas.strokeSegment(c0x, c0y, place.atX(d, fx, fw), place.atY(d, fy, fh), 1, zrame.Color.rgba(150, 170, 210, 0.30));
+            }
+            for (dots) |d| {
+                const dx = place.atX(d, fx, fw);
+                const dy = place.atY(d, fy, fh);
+                const rr = @max(d.r, 1.5);
+                canvas.fillRoundedRect(
+                    dx - rr,
+                    dy - rr,
+                    2 * rr,
+                    2 * rr,
+                    rr,
+                    zrame.Color.rgba(d.rgb[0], d.rgb[1], d.rgb[2], d.a),
+                );
+            }
+            ty += fig;
+        }
+        ty = drawWrapped(canvas, font, tx, ty, tw, 15, .regular, zrame.Color.rgba(216, 223, 233, 0.96), body, 21);
+        canvas.drawText(font, tx, y + h - 12, "Esc closes · click the point again to clear", .{
+            .size = 12,
+            .style = .regular,
+            .color = zrame.Color.rgba(150, 160, 178, 0.8),
+        });
     }
 
     fn drawHelp(canvas: *zrame.Canvas, font: anytype, content: zrame.Rect, txt: []const u8) void {

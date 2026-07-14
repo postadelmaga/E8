@@ -83,8 +83,8 @@ pub fn frame(a: *App) void {
             geom.rotateBasis(&a.basis, p[0], p[1], s * a.dt);
         }
     }
-    if (st.spin)
-        app_mod.storeF32(&app_mod.cam_yaw, app_mod.loadF32(&app_mod.cam_yaw) + 0.25 * a.dt);
+    if (st.spin) // CAS add: a concurrent drag on the window thread must not be lost
+        app_mod.addClampF32(&app_mod.cam_yaw, 0.25 * a.dt, -std.math.inf(f32), std.math.inf(f32));
 }
 
 pub fn status(a: *App, buf: []u8) []const u8 {

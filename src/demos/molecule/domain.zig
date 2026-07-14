@@ -36,10 +36,10 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/guide.zig"),
+    @import("../../plugins/inspector.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
-    @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
     @import("../../plugins/atmosphere.zig"),
 };

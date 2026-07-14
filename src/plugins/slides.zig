@@ -3,12 +3,13 @@
 //! it while authoring). Each slide names a preset/color/edge/filter config,
 //! narrates it in the side panel (citations included), optionally choreographs
 //! the camera and shows an inline diagram. K toggles kiosk auto-advance.
-//! Esc closes the topmost layer first (panel → app).
+//! Esc here closes the panel layer; the final Esc (app close) is the core's.
 
 const std = @import("std");
 const geom = @import("../geom.zig");
 const hud_mod = @import("../hud.zig");
 const deck_mod = @import("../deck.zig");
+const still_mod = @import("../still.zig");
 const keys = @import("../keys.zig");
 const app_mod = @import("../app.zig");
 const App = app_mod.App;
@@ -23,6 +24,9 @@ pub const id = "slides";
 
 pub const State = struct {
     deck: deck_mod.Deck = .{},
+    /// The picture the current slide put on screen, decoded once (a slide that
+    /// names the same file as the one showing does not decode it again).
+    still: ?still_mod.Still = null,
     idx: usize = 0,
     auto: bool = false,
     auto_t: f32 = 0,
@@ -49,7 +53,45 @@ pub fn init(a: *App) void {
 }
 
 pub fn deinit(a: *App) void {
-    deck_mod.deinit(a.gpa, a.pluginState(@This()).deck);
+    const st = a.pluginState(@This());
+    a.still = null;
+    if (st.still) |*s| s.deinit();
+    deck_mod.deinit(a.gpa, st.deck);
+}
+
+/// Put the slide's picture on screen, or take the last one off. A path that will
+/// not decode says so on the HUD and leaves the scene — a broken image is a
+/// missing figure, not a broken talk.
+fn applyStill(a: *App, path: []const u8) void {
+    const st = a.pluginState(@This());
+    if (st.still) |*s| {
+        if (std.mem.eql(u8, s.path, path)) return; // already showing it
+        a.still = null;
+        s.deinit();
+        st.still = null;
+    }
+    if (path.len == 0) return;
+    st.still = still_mod.load(a.gpa, a.io, path) catch |e| {
+        var buf: [160]u8 = undefined;
+        a.hud.setLine2(std.fmt.bufPrint(&buf, "the slide's picture will not open ({s}: {s})", .{
+            path, @errorName(e),
+        }) catch "the slide's picture will not open");
+        return;
+    };
+    a.still = &st.still.?;
+}
+
+/// The slide names the file its points come from: reload only when it differs
+/// from what is loaded (`reloadPoints` is a full rebuild of the point system).
+fn applyData(a: *App, path: []const u8) void {
+    if (path.len == 0) return;
+    if (comptime !@hasDecl(D, "load")) return; // this domain computes its points
+    a.reloadPoints(path) catch |e| {
+        var buf: [160]u8 = undefined;
+        a.hud.setLine2(std.fmt.bufPrint(&buf, "the slide's data will not open ({s}: {s})", .{
+            path, @errorName(e),
+        }) catch "the slide's data will not open");
+    };
 }
 
 pub fn key(a: *App, code: u32) bool {
@@ -87,12 +129,21 @@ pub fn key(a: *App, code: u32) bool {
         },
         keys.f5 => { // F5: hot-reload the deck while authoring
             deck_mod.deinit(a.gpa, st.deck);
-            st.deck = deck_mod.load(a.gpa, a.io, deckPath(), D.deck_default);
+            const loaded = deck_mod.loadEx(a.gpa, a.io, deckPath(), D.deck_default);
+            st.deck = loaded.deck;
             st.idx = @min(st.idx, st.deck.slides.len -| 1);
-            if (a.pluginState(panel).on and st.deck.slides.len > 0) show(a, st.idx);
+            if (loaded.parse_err) |e| {
+                // The author just edited this file: a silent revert to the
+                // embedded deck reads as "my edit was ignored".
+                var buf: [160]u8 = undefined;
+                a.hud.setLine2(std.fmt.bufPrint(&buf, "{s} will not parse ({s}) — playing the embedded deck", .{
+                    deckPath(), @errorName(e),
+                }) catch "deck.zon will not parse — playing the embedded deck");
+            } else if (a.pluginState(panel).on and st.deck.slides.len > 0) show(a, st.idx);
             return true;
         },
-        keys.escape => { // Esc: close the topmost layer first, then the app
+        keys.escape => { // Esc: close the panel layer. The app-level Esc lives in
+            // main.zig's key loop, so it works even in a domain without `slides`.
             if (a.pluginState(panel).on) {
                 panel.setOpen(a, false);
                 st.auto = false;
@@ -100,8 +151,7 @@ pub fn key(a: *App, code: u32) bool {
                 a.status_dirty = true;
                 return true;
             }
-            a.win.close();
-            return true;
+            return false;
         },
         else => return false,
     }
@@ -148,6 +198,10 @@ pub fn show(a: *App, idx: usize) void {
     const st = a.pluginState(@This());
     const s = &st.deck.slides[idx];
     st.auto_t = 0;
+    // What the slide is ABOUT, before how it is dressed: the data it looks at,
+    // and whether it looks at a picture instead.
+    applyData(a, s.data);
+    applyStill(a, s.image);
     // Smooth basis transition into the slide's projection (animated presets
     // drive themselves, so they snap).
     st.tr_from = a.basis;

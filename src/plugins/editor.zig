@@ -51,6 +51,9 @@ const Shared = struct {
     sel: usize = 0,
     /// The editor pressed save.
     save: bool = false,
+    /// Edits published since the last successful save. Drives the close
+    /// warning and the draft kept when the editor goes away unsaved.
+    unsaved: bool = false,
 
     /// The live camera (yaw, pitch, dist), republished every frame so that
     /// "capture the camera" is a read, not a request.
@@ -81,6 +84,10 @@ const EdSlide = struct {
     body: std.ArrayList(u8) = .empty,
     cite: std.ArrayList(u8) = .empty,
     fig: std.ArrayList(u8) = .empty,
+    /// A picture instead of the scene, and the file the points come from — the
+    /// two things that decide what the slide is LOOKING AT.
+    image: std.ArrayList(u8) = .empty,
+    data: std.ArrayList(u8) = .empty,
     preset: usize = 0,
     color: usize = 0, // 0 = none; else index+1 into D.color_modes
     filter: usize = 0, // 0 = none; else index+1 into D.filters
@@ -94,6 +101,8 @@ const EdSlide = struct {
         s.body.deinit(gpa);
         s.cite.deinit(gpa);
         s.fig.deinit(gpa);
+        s.image.deinit(gpa);
+        s.data.deinit(gpa);
     }
 };
 
@@ -158,6 +167,8 @@ pub const State = struct {
     model: ?*Model = null,
     shared: Shared = .{},
     opened: bool = false,
+    /// O pressed once with unsaved changes: the next O really closes.
+    close_armed: bool = false,
 };
 
 /// zrame's `build` callback carries only a user pointer, and the option tables are
@@ -192,7 +203,20 @@ pub fn key(a: *App, code: u32) bool {
     // in every domain, and `dispatchKey` stops at the first plugin that claims a key.
     if (code != keys.editor) return false; // O
     const st = a.pluginState(@This());
-    if (st.win == null) open(a) else close(a);
+    if (st.win == null) {
+        open(a);
+        return true;
+    }
+    // Closing throws the model away — warn once when there is unsaved work.
+    st.shared.lock();
+    const unsaved = st.shared.unsaved;
+    st.shared.unlock();
+    if (unsaved and !st.close_armed) {
+        st.close_armed = true;
+        a.hud.setLine2("the editor has unsaved changes — save there, or press O again to close (a draft is kept)");
+        return true;
+    }
+    close(a);
     return true;
 }
 
@@ -237,6 +261,8 @@ pub fn post(a: *App) void {
         };
         var buf: [128]u8 = undefined;
         sh.setNote(std.fmt.bufPrint(&buf, "saved to {s}", .{path}) catch "saved");
+        sh.unsaved = false;
+        st.close_armed = false;
     }
 }
 
@@ -271,6 +297,7 @@ fn winLoop(w: *zrame.Window) void {
 fn open(a: *App) void {
     const st = a.pluginState(@This());
     if (st.win != null) return;
+    st.close_armed = false;
     const gpa = a.gpa;
 
     const m = gpa.create(Model) catch return;
@@ -314,6 +341,10 @@ fn open(a: *App) void {
 fn close(a: *App) void {
     const st = a.pluginState(@This());
     const w = st.win orelse return;
+    // However the editor goes away — O, its close button, app shutdown —
+    // unsaved work leaves as a draft next to the deck, never silently.
+    saveDraft(a, st);
+    st.close_armed = false;
     w.close();
     if (st.thread) |t| t.join();
     w.deinit();
@@ -328,6 +359,30 @@ fn close(a: *App) void {
         freeModel(m);
         st.model = null;
     }
+}
+
+/// Write the last published ZON to `<deck>.draft` when it was never saved.
+/// The bytes are already serialized — losing them to a stray Esc costs the
+/// author a talk; a stale draft file costs nothing.
+fn saveDraft(a: *App, st: *State) void {
+    const sh = &st.shared;
+    sh.lock();
+    const data: []u8 = if (sh.unsaved and sh.zlen > 0)
+        a.gpa.dupe(u8, sh.zon[0..sh.zlen]) catch &.{}
+    else
+        &.{};
+    sh.unsaved = false;
+    sh.unlock();
+    if (data.len == 0) return;
+    defer a.gpa.free(data);
+    var pbuf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&pbuf, "{s}.draft", .{slides.deckPath()}) catch return;
+    std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = path, .data = data }) catch |e| {
+        std.debug.print("editor: could not keep the draft ({s})\n", .{@errorName(e)});
+        return;
+    };
+    var mbuf: [560]u8 = undefined;
+    a.hud.setLine2(std.fmt.bufPrint(&mbuf, "editor closed with unsaved changes — draft kept in {s}", .{path}) catch "editor draft kept");
 }
 
 fn freeModel(m: *Model) void {
@@ -350,6 +405,8 @@ fn fromDeck(m: *Model, d: deck_mod.Deck) void {
         setText(&e.body, m.gpa, s.body);
         setText(&e.cite, m.gpa, s.cite);
         setText(&e.fig, m.gpa, s.fig);
+        setText(&e.image, m.gpa, s.image);
+        setText(&e.data, m.gpa, s.data);
         e.preset = indexOfName(g_presets, s.preset, 0);
         e.color = if (s.color.len == 0) 0 else indexOfName(g_colors, s.color, 1);
         e.filter = if (s.filter.len == 0) 0 else indexOfName(g_filters, s.filter, 1);
@@ -375,6 +432,8 @@ fn republish(m: *Model) void {
             .body = e.body.items,
             .cite = e.cite.items,
             .fig = e.fig.items,
+            .image = e.image.items,
+            .data = e.data.items,
             .preset = if (g_presets.len > 0) g_presets[@min(e.preset, g_presets.len - 1)] else "",
             .color = if (e.color == 0) "" else g_colors[@min(e.color, g_colors.len - 1)],
             .filter = if (e.filter == 0) "" else g_filters[@min(e.filter, g_filters.len - 1)],
@@ -468,6 +527,16 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     ui.labelDim("citation");
     if (ui.textField("cite", &s.cite) != .idle) m.touched = true;
 
+    // What the slide LOOKS AT. Everything below this is how it is dressed; these
+    // two decide whether there is a figure at all, and what it is made of.
+    ui.gap(6);
+    ui.separator();
+    ui.labelDim("picture instead of the scene (a path — empty = show the scene)");
+    if (ui.textField("image", &s.image) != .idle) m.touched = true;
+    ui.labelDim("data for this slide (a file this demo can read — empty = the one it was opened with)");
+    if (ui.textField("data", &s.data) != .idle) m.touched = true;
+    ui.separator();
+
     ui.gap(6);
     ui.labelDim("projection");
     if (ui.dropdown("preset", g_presets, &s.preset)) m.touched = true;
@@ -537,4 +606,9 @@ fn flush(m: *Model) void {
     if (!m.touched) return;
     m.touched = false;
     republish(m);
+    // Only USER edits mark the deck unsaved (open() also republishes, to seed).
+    const sh = m.shared;
+    sh.lock();
+    sh.unsaved = true;
+    sh.unlock();
 }

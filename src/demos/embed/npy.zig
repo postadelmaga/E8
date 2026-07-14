@@ -1,8 +1,8 @@
 //! NumPy `.npy` reader — the format every embedding actually ships in.
 //!
 //! Only what an embedding matrix needs: version 1/2 headers, C order, 2-D shape,
-//! little-endian float32/float64 (and integer views of the same, cast on read).
-//! Anything else is refused with a clear error rather than misread.
+//! little-endian float32/float64. Anything else — integer dtypes included — is
+//! refused with a clear error rather than misread.
 
 const std = @import("std");
 
@@ -70,6 +70,9 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, max_rows: usiz
     const cols = if (n_dims >= 2) dims[1] else 1;
     const rows = @min(rows_all, max_rows);
     if (rows == 0 or cols == 0) return error.EmptyNpy;
+    // The shape is untrusted input: a fabricated header must not overflow the
+    // size arithmetic below, and no embedding is a million columns wide.
+    if (cols > 1_000_000) return error.BadNpyHeader;
 
     const elem: usize = if (std.mem.endsWith(u8, descr, "f4"))
         4
@@ -78,11 +81,12 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, max_rows: usiz
     else
         return error.UnsupportedDtype; // ints/objects: not an embedding matrix
     if (descr.len > 0 and descr[0] == '>') return error.BigEndianUnsupported;
-    if (body.len < rows * cols * elem) return error.TruncatedNpy;
+    const cells = try std.math.mul(usize, rows, cols);
+    if (body.len < try std.math.mul(usize, cells, elem)) return error.TruncatedNpy;
 
-    const out = try gpa.alloc(f32, rows * cols);
+    const out = try gpa.alloc(f32, cells);
     errdefer gpa.free(out);
-    for (0..rows * cols) |i| {
+    for (0..cells) |i| {
         const off = i * elem;
         out[i] = if (elem == 4)
             @bitCast(std.mem.readInt(u32, body[off..][0..4], .little))

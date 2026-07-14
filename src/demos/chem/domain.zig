@@ -49,10 +49,10 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/guide.zig"),
+    @import("../../plugins/inspector.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
-    @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
     @import("../../plugins/atmosphere.zig"),
 };
@@ -96,18 +96,21 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     atoms = st.atoms;
 
     // Bonds: what the file declared, plus what the radii imply. A PDB usually
-    // declares only its ligands, so both are needed to draw one molecule.
+    // declares only its ligands, so both are needed to draw one molecule — and
+    // every pair goes through one seen-set, because files repeat CONECT lines.
     const inferred = try read.inferBonds(gpa, atoms);
     defer gpa.free(inferred);
     var list: std.ArrayList([2]u16) = .empty;
     errdefer list.deinit(gpa);
-    try list.appendSlice(gpa, st.conect);
+    var seen: std.AutoHashMap(u32, void) = .init(gpa);
+    defer seen.deinit();
+    for (st.conect) |b| {
+        if ((try seen.getOrPut((@as(u32, b[0]) << 16) | b[1])).found_existing) continue;
+        try list.append(gpa, b);
+    }
     for (inferred) |b| {
-        var dup = false;
-        for (st.conect) |c| {
-            if (c[0] == b[0] and c[1] == b[1]) dup = true;
-        }
-        if (!dup) try list.append(gpa, b);
+        if ((try seen.getOrPut((@as(u32, b[0]) << 16) | b[1])).found_existing) continue;
+        try list.append(gpa, b);
     }
     bonds = try list.toOwnedSlice(gpa);
 

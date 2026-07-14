@@ -87,18 +87,16 @@ figure, and narrates it in the panel with precise citations:
 | 6 | 2407.02497 Tables 1–2 | spin(1,3) boost/spin weights: lattice e1e2 *is* the (ωT, ωS) plane |
 | 7 | 2407.02497 Fig 2 | the 192 fermion states, 8 disjoint 24-cells of the CPTt Group |
 
-Clicking a root opens the **inspector**: a separate frameless smoked-glass
-window with supplementary information and a live **zengine mini-scene** —
-emissive spheres, glowing orbit tubes, HDR bloom, presented zero-copy as a
-dmabuf — showing the particle's triality orbit slowly turning against the
-dimmed system. It gets its own zengine view even when the main window renders
-in software (one device, several views); without Vulkan it falls back to the
-additive software raster. The side panel simultaneously swaps to **that
-particle's story** —
-which block it belongs to, what Lisi identifies it as, what is exact and what
-is interpretation, with citations into 0711.0770, 2407.02497, 1004.4866 and
-the Distler–Garibaldi critique 0905.2658 where it applies. `P` resumes the
-tour; `Esc` closes the panel (and only then the app — layered).
+Clicking a root opens its **card**, on the glass beside the scene: the
+particle's supplementary reading, in the window you are already looking at —
+no popup, no new surface, no focus change. The root itself is lit in the scene
+(white ring and halo) and its triality partners flare around it in turn, which
+is what the card would otherwise be showing you a second, smaller copy of. The
+side panel simultaneously swaps to **that particle's story** — which block it
+belongs to, what Lisi identifies it as, what is exact and what is
+interpretation, with citations into 0711.0770, 2407.02497, 1004.4866 and the
+Distler–Garibaldi critique 0905.2658 where it applies. `P` resumes the tour;
+`Esc` closes the card, then the panel, then the app — layered.
 
 ## Controls
 
@@ -108,12 +106,12 @@ P           the paper journey: opens the side panel on a guided slide, then
             advances — each slide reproduces a figure of the papers AND
             narrates it (citations included), with camera choreography and an
             inline diagram; click a root mid-journey for that particle's own
-            story (and its inspector popup), P resumes the tour
+            story (and its card), P resumes the tour
 Backspace   one slide back
 K           kiosk mode: the journey auto-advances (per-slide dwell)
 F           fullscreen (F11 too)
-Esc         layered by window focus: in the popup it closes the popup; in the
-            main window it closes the shortcut card, then the panel, then the app
+Esc         layered: the shortcut card, then the point card, then the panel,
+            then the app
 
 drag        orbit · scroll zoom · click pick a root (click empty space to clear)
 1 / 2 / 3   projection: Coxeter plane · physics axes · lattice e1e2e3 (= Lisi's ωT,ωS spin-boost plane)
@@ -143,9 +141,9 @@ window, camera, projection and rasterizers; features are plugins
 (`src/demos/<name>/`). Three more domains ship as proof:
 
 ```sh
-zig build -Ddemo=mtheory run    # E10: where Lisi's E8 goes next (see below)
-zig build -Ddemo=molecule run   # caffeine: ball-and-stick, purine-core tour
-zig build -Ddemo=polytope run   # the 24-cell: three 16-cells, isoclinic rotation
+zig build run-demo -Ddemo=mtheory    # E10: where Lisi's E8 goes next (see below)
+zig build run-demo -Ddemo=molecule   # caffeine: ball-and-stick, purine-core tour
+zig build run-demo -Ddemo=polytope   # the 24-cell: three 16-cells, isoclinic rotation
 ```
 
 ### The M-theory demo
@@ -205,19 +203,29 @@ it is a window, a list, and `std.process.Child`.
 
 ## The launcher and the editor
 
-`zig build run` opens a menu with three tabs.
+`zig build run` opens a **wall of posters** — one card per demo, and a click on
+a poster plays it. The posters are drawn, not loaded: each domain gets a few
+lines of canvas — roots on their rings, atoms and bonds, a star field, two
+t-SNE blobs — deterministic from the card's own index, so the same demo always
+wears the same face and nothing ever goes stale. Hover a card and it lifts; the
+pencil in its corner opens the same demo **in the editor**, which is how you
+read how a deck is made: the slides you are looking at are the ones in the
+list. The wall hangs in three shelves:
 
-**Demo** — the nine built-in ones. Each can be opened normally, or **in the
-editor**, which is how you read how a deck is made: the slides you are looking at
-are the ones in the list.
+**Your demos** — what you have authored, scanned from `demos-user/`. It comes
+first, because it is the reason you opened the launcher.
 
-**Le mie demo** — what you have authored, scanned from `demos-user/`.
+**Ready to watch** — the built-in demos whose points are computed, so they need
+no file: Lisi's E8, M-theory's E10, the 24-cell, the toy molecule.
 
-**Nuova demo** — a wizard. Pick a category, give it data, name it. A demo you make
-is nothing but a directory:
+**Bring your own data** — one poster per field, closed by a **New demo** card.
+Clicking any of them opens the wizard: pick a category, give it data, name it.
+A **GPU rendering** toggle (off by default) decides whether the demos the
+launcher starts get `--gpu` — software rendering stays the default, for the
+reasons at the end of this page. A demo you make is nothing but a directory:
 
 ```
-demos-user/mia-proteina/
+demos-user/my-protein/
   manifest.zon    .{ .name = "…", .domain = "chem", .asset = "1ubq.pdb" }
   1ubq.pdb        the data
   deck.zon        the slides
@@ -228,7 +236,7 @@ that already exist should look at your data, and then writing the slides.
 
 | category | domain | asset | its specialized tool |
 |---|---|---|---|
-| Chemistry & molecular biology | `chem` | PDB, XYZ | **the online vocabulary**: a molecule by name from **PubChem** (3D conformer → XYZ), a structure by ID from **RCSB** |
+| Chemistry & structural biology | `chem` | PDB, XYZ | **the online vocabulary**: a molecule by name from **PubChem** (3D conformer → XYZ), a structure by ID from **RCSB** |
 | Astronomy | `astro` | catalog CSV | the H–R diagram, blackbody color |
 | Networks & graphs | `graph` | GraphML, edge list | the Laplacian spectrum, communities |
 | Tables | `data` | CSV, TSV | principal axes, k-NN |

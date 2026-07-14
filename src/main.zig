@@ -6,13 +6,16 @@
 //! reference domain). See src/app.zig for the hook contract.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const ze = @import("zengine");
 const zrame = @import("zrame");
 const geom = @import("geom.zig");
+const keys = @import("keys.zig");
 const hud_mod = @import("hud.zig");
 const render_cpu = @import("render_cpu.zig");
 const render_gpu = @import("render_gpu.zig");
 const app_mod = @import("app.zig");
+const still_mod = @import("still.zig");
 const App = app_mod.App;
 const D = app_mod.D;
 
@@ -45,12 +48,10 @@ fn onMouse(_: *zrame.Window, event: zrame.MouseEvent, _: ?*anyopaque) bool {
                 const dx = m.x - drag.last_x;
                 const dy = m.y - drag.last_y;
                 drag.moved += @abs(dx) + @abs(dy);
-                app_mod.storeF32(&app_mod.cam_yaw, app_mod.loadF32(&app_mod.cam_yaw) + dx * 0.008);
-                app_mod.storeF32(&app_mod.cam_pitch, std.math.clamp(
-                    app_mod.loadF32(&app_mod.cam_pitch) + dy * 0.008,
-                    -1.45,
-                    1.45,
-                ));
+                // CAS updates: the render thread (spin, kiosk easing) writes the
+                // same atomics, and a load→store pair here would lose its update.
+                app_mod.addClampF32(&app_mod.cam_yaw, dx * 0.008, -std.math.inf(f32), std.math.inf(f32));
+                app_mod.addClampF32(&app_mod.cam_pitch, dy * 0.008, -1.45, 1.45);
                 drag.last_x = m.x;
                 drag.last_y = m.y;
                 return true;
@@ -77,7 +78,9 @@ fn onMouse(_: *zrame.Window, event: zrame.MouseEvent, _: ?*anyopaque) bool {
                     const xb: u64 = @as(u32, @bitCast(drag.last_x));
                     const yb: u64 = @as(u32, @bitCast(drag.last_y));
                     g_click.store(xb << 32 | yb, .monotonic);
-                    g_click_flag.store(true, .monotonic);
+                    // Release pairs with the consumer's acquire: the coordinates
+                    // must be visible before the flag is.
+                    g_click_flag.store(true, .release);
                 }
                 return true;
             }
@@ -92,8 +95,8 @@ fn onMouse(_: *zrame.Window, event: zrame.MouseEvent, _: ?*anyopaque) bool {
 
 fn onScroll(_: *zrame.Window, axis: u32, value: i32, _: ?*anyopaque) void {
     if (axis != 0 or value == 0) return;
-    const d = app_mod.loadF32(&app_mod.cam_dist) * @exp(@as(f32, @floatFromInt(value)) / 256.0 * 0.02);
-    app_mod.storeF32(&app_mod.cam_dist, std.math.clamp(d, 2.0, 24.0));
+    const m = @exp(@as(f32, @floatFromInt(value)) / 256.0 * 0.02);
+    app_mod.mulClampF32(&app_mod.cam_dist, m, 2.0, 24.0);
 }
 
 fn onKey(_: *zrame.Window, key: u32, state: u32, _: ?*anyopaque) void {
@@ -153,10 +156,31 @@ fn cross3(a: [3]f32, b: [3]f32) [3]f32 {
     return .{ a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0] };
 }
 
+/// Why the file would not open, in a sentence the person who chose it can use.
+/// A domain rejects a file with an error name (`NoSkyCoordinates`); a name is not
+/// an explanation, and the launcher has nothing else to show.
+fn explainLoadFailure(e: anyerror) void {
+    const file = if (app_mod.cli.file.len > 0) app_mod.cli.file else "(no file given)";
+    const why: []const u8 = switch (e) {
+        error.NoSkyCoordinates => "no right-ascension / declination columns in it — a star catalog needs ra/dec (Gaia, SIMBAD and HYG name them that way)",
+        error.NoNumericColumns => "no numeric columns in it — this demo plots numbers, so the table needs at least three",
+        error.NoAtoms => "no atoms in it — this demo reads PDB, mmCIF and XYZ structures",
+        error.FileNotFound => "there is no such file",
+        error.IsDir => "that is a directory, not a file",
+        error.AccessDenied => "it cannot be read (permissions)",
+        else => @errorName(e),
+    };
+    std.debug.print("{s} cannot open \"{s}\": {s}\n", .{ D.name, file, why });
+}
+
 pub fn main(init: std.process.Init.Minimal) !void {
+    // Debug bookkeeping only where it can trip something: the default build is
+    // ReleaseFast and its allocations should not pay for leak tracking.
     var debug_alloc: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = debug_alloc.deinit();
-    const gpa = debug_alloc.allocator();
+    defer if (builtin.mode == .Debug) {
+        _ = debug_alloc.deinit();
+    };
+    const gpa = if (builtin.mode == .Debug) debug_alloc.allocator() else std.heap.smp_allocator;
 
     var threaded: std.Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
@@ -195,18 +219,28 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
 
     // --- the point system (domain-supplied: generated, or read from a file) --------
-    const points = try app_mod.loadPoints(gpa, io);
-    defer app_mod.unloadPoints(gpa, points);
-    const n_pts = points.len;
+    const points = app_mod.loadPoints(gpa, io) catch |e| {
+        // The launcher shows the LAST line this process printed, so the last line
+        // has to be the one a person can act on. Zig's own "error: NoSkyCoordinates"
+        // is not that line, so we say it ourselves and leave.
+        explainLoadFailure(e);
+        std.process.exit(1);
+    };
+    var n_pts = points.len;
     const edges = try D.buildEdges(gpa, points);
-    defer gpa.free(edges);
-    const max_instances: u32 = @intCast(n_pts + edges.len + 16);
+    // A relation edge mode can emit up to ONE PAIR PER POINT (see plugins/edges.zig),
+    // which in sparse domains is more than the lattice edge list — both render
+    // buffers must be sized for whichever is larger. The domain's own meshes (a
+    // Calabi–Yau, say) ride along as instances of their own.
+    var max_pairs = @max(edges.len, n_pts);
+    const extra_parts: usize = if (@hasDecl(D, "extra_parts")) D.extra_parts else 0;
+    var max_instances: u32 = @intCast(n_pts + max_pairs + extra_parts + 16);
 
     std.debug.print(
         \\{s} — {d} points, {d} edges (presenter framework)
         \\  H opens the shortcut card — every key this build binds, this demo's included.
         \\  P next slide · Backspace back · K kiosk · F fullscreen · Esc closes the top layer
-        \\  drag orbit · scroll zoom · click pick (opens the inspector) · 1..{d} presets
+        \\  drag orbit · scroll zoom · click a point (its card opens) · 1..{d} presets
         \\
     , .{ D.name, n_pts, edges.len, D.presets.len });
     for (D.actions) |act| std.debug.print("  {s}\n", .{act.help});
@@ -238,15 +272,24 @@ pub fn main(init: std.process.Init.Minimal) !void {
         .hud = &hud,
         .points = points,
         .edges = edges,
+        .opened_with = app_mod.cli.file,
         .basis = D.presets[0].basis(0),
     };
     try app.initTables();
-    defer app.deinitTables();
+    // Whatever the app HOLDS at the end, not what it started with: a slide can
+    // replace the point system (`.data` → app.reloadPoints), and the first one is
+    // long freed by then.
+    defer {
+        app.deinitTables();
+        app_mod.unloadPoints(gpa, app.points);
+        gpa.free(app.edges);
+        app.deinitSource();
+    }
 
     // --- renderers -------------------------------------------------------------------
-    // The zengine device is created whenever Vulkan/dmabuf allows it, even when
-    // the main window renders in software: plugins (the inspector's mini-scene)
-    // ask it for their own `View`.
+    // The zengine device is created whenever Vulkan/dmabuf allows it: it holds the
+    // baked meshes (sphere, tube, and whatever the domain adds — the M-theory
+    // Calabi–Yau), which only the `--gpu` main view draws.
     var gpu3d: ?*render_gpu.Gpu3d = render_gpu.Gpu3d.create(gpa, io) catch |e| blk: {
         std.debug.print("zengine unavailable ({s}) — software render everywhere\n", .{@errorName(e)});
         break :blk null;
@@ -264,24 +307,25 @@ pub fn main(init: std.process.Init.Minimal) !void {
     }
     var cpu = render_cpu.Cpu{ .gpa = gpa };
     defer cpu.deinit();
+    // Sized by the point system — which a slide can REPLACE (`.data`, see
+    // app.reloadPoints), so these are re-sized whenever it does.
     var instances: []ze.gpu_mesh.Instance = try gpa.alloc(ze.gpu_mesh.Instance, max_instances);
     defer gpa.free(instances);
-    const edge_jobs = try gpa.alloc(render_cpu.Edge, edges.len + 64);
+    var edge_jobs = try gpa.alloc(render_cpu.Edge, max_pairs + 64);
     defer gpa.free(edge_jobs);
+    var dot_jobs = try gpa.alloc(render_cpu.Dot, n_pts);
+    defer gpa.free(dot_jobs);
     const workers = @max(std.Thread.getCpuCount() catch 4, 2);
-    const threads = try gpa.alloc(std.Thread, workers - 1);
-    defer gpa.free(threads);
+    try cpu.startPool(io, workers - 1);
     std.debug.print("render path: {s} · zengine device: {s}\n", .{
         if (main_view != null) "GPU (zengine mesh raster + bloom, dmabuf)" else "CPU (software)",
-        if (gpu3d != null) "yes (inspector scenes use it)" else "no",
+        if (gpu3d != null) "yes" else "no",
     });
 
-    // Plugins can now reach the zengine device (the inspector renders its
-    // mini-scene on it even when the main window is on the software path).
     app.gpu = gpu3d;
     app_mod.dispatchInit(&app);
 
-    const order = try gpa.alloc(u16, n_pts); // CPU painter's order
+    var order = try gpa.alloc(u16, n_pts); // CPU painter's order
     defer gpa.free(order);
     // GPU resize debounce: rebuild the raster once the size settles.
     var gpu_want_w: u32 = gpu_w;
@@ -289,7 +333,13 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var gpu_want_since: f32 = 0;
 
     var frame_no: u64 = 0;
+    // The video plane is unmapped once when a picture slide comes up; the next 3D
+    // frame maps it again by presenting into it.
+    var showing_still = false;
     var fps_frames: u32 = 0;
+    var status_prev: [256]u8 = undefined;
+    var status_prev_len: usize = 0;
+    var status_fps: u32 = 0xffff_ffff;
     var fps_last: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(.MONOTONIC, &fps_last);
     var prev_ts = fps_last;
@@ -306,8 +356,13 @@ pub fn main(init: std.process.Init.Minimal) !void {
         hud.tick(@as(i128, now.sec) * 1_000_000_000 + now.nsec);
 
         // --- input → plugins -----------------------------------------------------------
-        while (app_mod.popKey()) |code| _ = app_mod.dispatchKey(&app, code);
-        if (g_click_flag.swap(false, .monotonic)) {
+        while (app_mod.popKey()) |code| {
+            if (app_mod.dispatchKey(&app, code)) continue;
+            // The final Esc — no layer claimed it — closes the app. It lives HERE,
+            // not in a plugin, so a domain that drops `slides` still has a way out.
+            if (code == keys.escape) win.close();
+        }
+        if (g_click_flag.swap(false, .acquire)) {
             const packed_xy = g_click.load(.monotonic);
             app.pick = .{
                 @bitCast(@as(u32, @truncate(packed_xy >> 32))),
@@ -315,13 +370,40 @@ pub fn main(init: std.process.Init.Minimal) !void {
             };
         }
         app_mod.dispatchFrame(&app);
+
+        // A slide changed the data (app.reloadPoints): every buffer here was sized
+        // for the system that is now gone. The plugins rebuilt their own in the
+        // `reload` hook; these are the renderer's.
+        if (app.points_changed) {
+            app.points_changed = false;
+            n_pts = app.count();
+            max_pairs = @max(app.edges.len, n_pts);
+            const want: u32 = @intCast(n_pts + max_pairs + extra_parts + 16);
+            if (want > max_instances) {
+                max_instances = want;
+                instances = try gpa.realloc(instances, max_instances);
+                // The GPU view's instance buffer is fixed at creation.
+                if (main_view) |v| {
+                    v.destroy();
+                    main_view = gpu3d.?.createView(v.w, v.h, max_instances, 0.45) catch |e| blk: {
+                        std.debug.print("GPU view unavailable after reload ({s}) — software render\n", .{@errorName(e)});
+                        break :blk null;
+                    };
+                }
+            }
+            if (max_pairs + 64 > edge_jobs.len) edge_jobs = try gpa.realloc(edge_jobs, max_pairs + 64);
+            if (n_pts > dot_jobs.len) dot_jobs = try gpa.realloc(dot_jobs, n_pts);
+            if (n_pts > order.len) order = try gpa.realloc(order, n_pts);
+            std.debug.print("{s}: {d} points, {d} edges\n", .{ app.sourceName(), n_pts, app.edges.len });
+        }
+
         if (app.reset_camera) {
             app.reset_camera = false;
             app_mod.storeF32(&app_mod.cam_yaw, 0.65);
             app_mod.storeF32(&app_mod.cam_pitch, 0.35);
             app_mod.storeF32(&app_mod.cam_dist, 4.2);
         }
-        geom.orthonormalize(&app.basis);
+        if (app.renorm_basis) geom.orthonormalize(&app.basis);
 
         // --- project dim-D → 3D ------------------------------------------------------
         for (app.points, 0..) |*r, i| {
@@ -409,7 +491,20 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const pairs = app_mod.edgePairs(&app);
 
         // --- draw ---------------------------------------------------------------------------
-        if (main_view) |mv| {
+        if (app.still) |pic| {
+            // A picture slide: the still IS the scene. It is composed in software
+            // and presented like any frame — and on the GPU path the video plane
+            // has to be taken away first, or the last 3D frame would sit on top of
+            // it (a dmabuf frame is a subsurface, not the window's content).
+            if (!showing_still and main_view != null) win.hideVideo();
+            showing_still = true;
+            try cpu.ensure(rw, rh);
+            still_mod.compose(pic, cpu.fb, rw, rh);
+            win.presentRgba(rw, rh, cpu.fb);
+            var ts = std.os.linux.timespec{ .sec = 0, .nsec = 16_000_000 };
+            _ = std.os.linux.nanosleep(&ts, null);
+        } else if (main_view) |mv| {
+            showing_still = false;
             var count: usize = 0;
             const terr = 2.0 * dist * std.math.tan(fovy * 0.5) / @as(f32, @floatFromInt(rh)) * 1.5;
             for (0..n_pts) |i| {
@@ -434,6 +529,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 count += 1;
             }
             for (pairs) |ed| {
+                if (count == instances.len) break; // sized for the worst case; belt and braces
                 const ev = app_mod.edgeVisual(&app, ed[0], ed[1]) orelse continue;
                 const a = ed[0];
                 const b = ed[1];
@@ -471,6 +567,32 @@ pub fn main(init: std.process.Init.Minimal) !void {
                     },
                 };
                 count += 1;
+            }
+
+            // The domain's OWN object, when it has one and something is selected.
+            // It used to live in the inspector's popup scene; it belongs here, in
+            // the scene the roots are in — the M-theory demo's Calabi–Yau is the
+            // space the selected root is curled up inside, not an illustration of it.
+            if (comptime @hasDecl(D, "sceneExtra")) {
+                if (app.selected >= 0) {
+                    const sel: usize = @intCast(app.selected);
+                    for (gpu3d.?.extra_ranges, 0..) |range, part| {
+                        if (count == instances.len) break;
+                        const x = D.sceneExtra(&app, sel, part) orelse continue;
+                        instances[count] = .{
+                            .model = x.model,
+                            .target_error = terr,
+                            .ref_range = range,
+                            .material = .{
+                                .base_color = x.base_color,
+                                .emissive = x.emissive,
+                                .roughness = x.roughness,
+                                .metallic = x.metallic,
+                            },
+                        };
+                        count += 1;
+                    }
+                }
             }
 
             while (win.videoBusy() and !win.closed) {
@@ -512,14 +634,16 @@ pub fn main(init: std.process.Init.Minimal) !void {
             }
             if (!gpu_ok) {
                 main_view.?.destroy();
-                main_view = null; // the device stays for the inspector's scenes
+                main_view = null; // the device stays baked, the raster goes
             }
         } else {
             // --- software path ---------------------------------------------------------
+            showing_still = false;
             try cpu.ensure(rw, rh);
             cpu.clear();
             var n_jobs: usize = 0;
             for (pairs) |ed| {
+                if (n_jobs == edge_jobs.len) break; // sized for the worst case; belt and braces
                 const a = ed[0];
                 const b = ed[1];
                 if (!app.vis[a] or !app.vis[b]) continue;
@@ -535,8 +659,9 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 };
                 n_jobs += 1;
             }
-            cpu.drawEdges(edge_jobs[0..n_jobs], threads);
-            // Points back-to-front.
+            cpu.drawEdges(edge_jobs[0..n_jobs]);
+            // Points back-to-front, gathered into jobs so the point pass runs
+            // on the same band workers as the edges.
             for (0..n_pts) |i| order[i] = @intCast(i);
             const S = struct {
                 fn farFirst(zz: [][3]f32, lhs: u16, rhs: u16) bool {
@@ -544,20 +669,43 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 }
             };
             std.sort.pdq(u16, order, app.scr, S.farFirst);
+            var n_dots: usize = 0;
             for (order) |i| {
                 if (!app.vis[i]) continue;
                 const v = &app.visuals[i];
                 const rad = std.math.clamp(point_radius * focal / app.scr[i][2], 1.6, 15.0) * v.radius;
-                if (v.halo) |h|
-                    cpu.halo(app.scr[i][0], app.scr[i][1], rad * h.radius_mul + 6.0, h.rgb, h.k);
-                cpu.disc(app.scr[i][0], app.scr[i][1], rad, v.color, v.bright);
-                if (v.ring) |rgb|
-                    cpu.ring(app.scr[i][0], app.scr[i][1], rad + 4.0, rgb);
+                var d = render_cpu.Dot{
+                    .x = app.scr[i][0],
+                    .y = app.scr[i][1],
+                    .rad = rad,
+                    .rgb = v.color,
+                    .bright = v.bright,
+                };
+                if (v.halo) |h| {
+                    d.halo_r = rad * h.radius_mul + 6.0;
+                    d.halo_rgb = h.rgb;
+                    d.halo_k = h.k;
+                }
+                if (v.ring) |rgb| {
+                    d.ring_r = rad + 4.0;
+                    d.ring_rgb = rgb;
+                }
+                dot_jobs[n_dots] = d;
+                n_dots += 1;
             }
+            cpu.drawDots(dot_jobs[0..n_dots]);
             win.presentRgba(rw, rh, cpu.fb);
-            // Pace the software path: no point rendering faster than the display.
-            var ts = std.os.linux.timespec{ .sec = 0, .nsec = 4_000_000 };
-            _ = std.os.linux.nanosleep(&ts, null);
+            // Pace the software path: sleep off the rest of a ~120 Hz budget
+            // instead of a fixed nap, so an idle scene stops burning CPU at
+            // 200 fps and a heavy one is not slowed further.
+            var after: std.os.linux.timespec = undefined;
+            _ = std.os.linux.clock_gettime(.MONOTONIC, &after);
+            const spent_ns = (after.sec - now.sec) * 1_000_000_000 + (after.nsec - now.nsec);
+            const budget_ns: i64 = 8_300_000;
+            if (spent_ns < budget_ns) {
+                var ts = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(budget_ns - spent_ns) };
+                _ = std.os.linux.nanosleep(&ts, null);
+            }
         }
         frame_no += 1;
 
@@ -566,8 +714,20 @@ pub fn main(init: std.process.Init.Minimal) !void {
         const el = @as(f64, @floatFromInt(now.sec - fps_last.sec)) +
             @as(f64, @floatFromInt(now.nsec - fps_last.nsec)) / 1e9;
         if (el >= 0.5 or app.status_dirty) {
-            var buf: [160]u8 = undefined;
-            hud.setLine1(app_mod.buildStatus(&app, &buf));
+            var buf: [256]u8 = undefined;
+            const s = app_mod.buildStatus(&app, &buf);
+            // `setLine1` invalidates the whole overlay glass — skip it when
+            // nothing the user can see changed (same text, same rounded FPS).
+            const ms: f32 = @bitCast(hud.ms_bits.load(.monotonic));
+            const fps_now: u32 = if (ms > 0.001) @intFromFloat(@round(1000.0 / ms)) else 0;
+            if (app.status_dirty or fps_now != status_fps or
+                !std.mem.eql(u8, s, status_prev[0..status_prev_len]))
+            {
+                hud.setLine1(s);
+                @memcpy(status_prev[0..s.len], s);
+                status_prev_len = s.len;
+                status_fps = fps_now;
+            }
             app.status_dirty = false;
             fps_frames = 0;
             fps_last = now;

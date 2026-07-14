@@ -69,8 +69,9 @@ pub const planes = blk: {
 /// Plain first-three-coordinates view — every domain's fallback preset.
 pub fn coordBasis(_: f32) Basis {
     var b: Basis = @splat(@splat(0));
-    b[0][0] = 1;
-    if (dim > 1) b[1][1] = 1;
-    if (dim > 2) b[2][2] = 1 else b[2][@min(dim - 1, 2)] = 1;
+    // One axis per row while the dimensions last. A dim < 3 domain leaves the
+    // spare screen axes ZERO (stable through orthonormalize: 0/eps = 0) — a
+    // duplicated row would be Gram-Schmidt-collapsed into noise instead.
+    for (0..@min(dim, 3)) |i| b[i][i] = 1;
     return b;
 }

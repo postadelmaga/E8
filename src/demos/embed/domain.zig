@@ -61,10 +61,10 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/guide.zig"),
+    @import("../../plugins/inspector.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
-    @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
     @import("../../plugins/atmosphere.zig"),
 };
@@ -266,28 +266,13 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
         std.debug.print("t-SNE skipped: {d} rows over the {d} the exact solver takes — PCA views only\n", .{ n_rows, reduce.max_tsne });
     }
 
-    // Clusters (k-means in the original space), and the cosine neighbor table.
+    // Clusters (k-means in the original space). The cosine neighbor table falls
+    // out of the k-NN sweep in buildEdges, which runs right after this returns.
     {
         const m = reduce.Matrix{ .data = vec, .n = n_rows, .d = n_dims };
         const cl = try reduce.kmeans(gpa, m, n_clusters, 40, 0xC1A5);
         defer gpa.free(cl);
         for (pts, 0..) |*p, i| p.cluster = cl[i];
-    }
-    nn = try gpa.alloc(u16, n_rows);
-    nn_sim = try gpa.alloc(f32, n_rows);
-    for (0..n_rows) |i| {
-        var best: usize = i;
-        var best_s: f32 = -2;
-        for (0..n_rows) |j| {
-            if (i == j) continue;
-            const s = cosine(i, j);
-            if (s > best_s) {
-                best_s = s;
-                best = j;
-            }
-        }
-        nn[i] = @intCast(best);
-        nn_sim[i] = best_s;
     }
 
     buildMenus();
@@ -551,24 +536,37 @@ pub fn buildEdges(gpa: std.mem.Allocator, points: []const Point) ![]const [2]u16
     const k = @min(@max(app_mod.cli.knn, 1), 16);
     var out: std.ArrayList([2]u16) = .empty;
     errdefer out.deinit(gpa);
+    // The 1-NN table (N, the relation, the readouts) is the best entry of this
+    // same sweep — the one O(n²·d) pass the domain makes.
+    if (nn.len == 0) nn = try gpa.alloc(u16, n_rows);
+    if (nn_sim.len == 0) nn_sim = try gpa.alloc(f32, n_rows);
     var best: [16]struct { s: f32, j: usize } = undefined;
     for (0..n_rows) |i| {
         var filled: usize = 0;
+        var worst: usize = 0; // the weakest of the k kept, updated on replacement
         for (0..n_rows) |j| {
             if (i == j) continue;
             const s = cosine(i, j);
             if (filled < k) {
                 best[filled] = .{ .s = s, .j = j };
+                if (best[filled].s < best[worst].s) worst = filled;
                 filled += 1;
                 continue;
             }
-            var worst: usize = 0;
+            if (s <= best[worst].s) continue;
+            best[worst] = .{ .s = s, .j = j };
+            worst = 0;
             for (1..k) |m| {
                 if (best[m].s < best[worst].s) worst = m;
             }
-            if (s > best[worst].s) best[worst] = .{ .s = s, .j = j };
         }
+        nn[i] = @intCast(i);
+        nn_sim[i] = -2;
         for (best[0..filled]) |b| {
+            if (b.s > nn_sim[i]) {
+                nn_sim[i] = b.s;
+                nn[i] = @intCast(b.j);
+            }
             if (i < b.j) try out.append(gpa, .{ @intCast(i), @intCast(b.j) });
         }
     }

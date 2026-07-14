@@ -52,10 +52,10 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/guide.zig"),
+    @import("../../plugins/inspector.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
-    @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
     @import("../../plugins/atmosphere.zig"),
 };
@@ -543,6 +543,7 @@ pub fn buildEdges(gpa: std.mem.Allocator, points: []const Point) ![]const [2]u16
     var best: [16]struct { d: f32, j: usize } = undefined;
     for (points, 0..) |*p, i| {
         var filled: usize = 0;
+        var worst: usize = 0; // the farthest of the k kept, updated on replacement
         for (points, 0..) |*q, j| {
             if (i == j) continue;
             var d: f32 = 0;
@@ -552,15 +553,17 @@ pub fn buildEdges(gpa: std.mem.Allocator, points: []const Point) ![]const [2]u16
             }
             if (filled < k) {
                 best[filled] = .{ .d = d, .j = j };
+                if (best[filled].d > best[worst].d) worst = filled;
                 filled += 1;
                 continue;
             }
-            // Replace the worst of the k kept so far.
-            var worst: usize = 0;
+            // Replace the worst of the k kept so far; only then rescan for the new worst.
+            if (d >= best[worst].d) continue;
+            best[worst] = .{ .d = d, .j = j };
+            worst = 0;
             for (1..k) |m| {
                 if (best[m].d > best[worst].d) worst = m;
             }
-            if (d < best[worst].d) best[worst] = .{ .d = d, .j = j };
         }
         for (best[0..filled]) |b| {
             // One edge per pair: the lower index owns it.

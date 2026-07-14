@@ -58,6 +58,10 @@ pub fn toggle(a: *App) void {
         // hep-th/0212256 → Class. Quantum Grav. 20 (2003) R145.
         st.bil = e10.Billiard.init(20_031_145);
     }
+    // The Kasner shear IS a non-unit basis: the core's per-frame
+    // orthonormalization would renormalize every row and cancel the
+    // stretch/crush this mode exists to show.
+    a.renorm_basis = !st.on;
     a.status_dirty = true;
     a.info_dirty = true;
 }

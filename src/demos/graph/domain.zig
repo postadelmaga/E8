@@ -46,10 +46,10 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/guide.zig"),
+    @import("../../plugins/inspector.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
-    @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
     @import("../../plugins/atmosphere.zig"),
 };
@@ -154,7 +154,7 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
 
     try spectralLayout(gpa, pts);
     try communities(gpa, pts);
-    components(pts);
+    try components(gpa, pts);
 
     hub = try gpa.alloc(u16, n);
     for (0..n) |i| {
@@ -349,10 +349,13 @@ fn communities(gpa: std.mem.Allocator, pts: []Point) !void {
 }
 
 /// Connected components — what falls apart when you are not looking.
-fn components(pts: []Point) void {
+fn components(gpa: std.mem.Allocator, pts: []Point) !void {
     const n = pts.len;
     n_comp = 0;
-    var stack: [4096]u16 = undefined;
+    // Every node is pushed at most once (it is marked first), so n entries hold
+    // the worst case.
+    const stack = try gpa.alloc(u16, n);
+    defer gpa.free(stack);
     for (pts) |*p| p.component = std.math.maxInt(u16);
     for (0..n) |s| {
         if (pts[s].component != std.math.maxInt(u16)) continue;
@@ -367,10 +370,8 @@ fn components(pts: []Point) void {
             for (neighbors(i)) |j| {
                 if (pts[j].component != std.math.maxInt(u16)) continue;
                 pts[j].component = c;
-                if (top < stack.len) {
-                    stack[top] = j;
-                    top += 1;
-                }
+                stack[top] = j;
+                top += 1;
             }
         }
         n_comp += 1;
@@ -501,7 +502,7 @@ fn actHub(a: *App) void {
 }
 
 pub const actions = &[_]app_mod.ActionDef{
-    .{ .key = keys.domain_h, .help = "J: climb to the hub of this node's neighborhood", .run = actHub },
+    .{ .key = keys.domain_j, .help = "J: climb to the hub of this node's neighborhood", .run = actHub },
 };
 
 // --- readouts ---------------------------------------------------------------------------------

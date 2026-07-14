@@ -34,7 +34,7 @@
         },
         .{
             .title = "Walk the skeleton",
-            .body = "Click any atom and press G to step along the bonded skeleton, or use the inspector popup that opens with the selection.\nThis whole presentation is the SAME framework that drives the E8/Lisi interactive paper — only the domain package changed: points, classifications, presets, deck.",
+            .body = "Click any atom: its card opens beside the scene. Press G to step along the bonded skeleton.\nThis whole presentation is the SAME framework that drives the E8/Lisi interactive paper — only the domain package changed: points, classifications, presets, deck.",
             .cite = "src/demos/molecule/ · see the framework docs.",
             .preset = "turntable",
             .color = "CPK elements",

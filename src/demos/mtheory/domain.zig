@@ -64,10 +64,10 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/guide.zig"),
+    @import("../../plugins/inspector.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
-    @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
     @import("../../plugins/atmosphere.zig"),
     // Last, so the Big Bang overrides every other visual while it runs.
@@ -93,26 +93,35 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
 pub fn buildEdges(gpa: std.mem.Allocator, points: []const Point) ![]const [2]u16 {
     var out: std.ArrayList([2]u16) = .empty;
     errdefer out.deinit(gpa);
+
+    // Lisi's figure first: the 60° pairs live entirely inside the 240-root
+    // E8 sub-system, so only those pairs are worth the inner product.
     for (points, 0..) |a, i| {
+        if (!a.in_e8) continue;
         for (points[i + 1 ..], i + 1..) |b, j| {
-            var link = a.in_e8 and b.in_e8 and e10.ip(a.w, b.w) == 1;
-            if (!link) {
-                var d: [10]i32 = undefined;
-                for (&d, a.w, b.w) |*x, p, q| x.* = p - q;
-                for (e10.simple) |alpha| {
-                    if (std.mem.eql(i32, &d, &alpha)) {
-                        link = true;
-                        break;
-                    }
-                    var neg: [10]i32 = undefined;
-                    for (&neg, alpha) |*x, c| x.* = -c;
-                    if (std.mem.eql(i32, &d, &neg)) {
-                        link = true;
-                        break;
-                    }
-                }
-            }
-            if (link) try out.append(gpa, .{ @intCast(i), @intCast(j) });
+            if (b.in_e8 and e10.ip(a.w, b.w) == 1)
+                try out.append(gpa, .{ @intCast(i), @intCast(j) });
+        }
+    }
+
+    // The arrows of the algebra: two roots differ by a simple root exactly when
+    // w + α is itself a root, so index the (exact, integer) coordinates once and
+    // each wall is a lookup instead of a sweep over every pair. A pair is found
+    // from one end only — α and −α are never both simple.
+    var by_w: std.AutoHashMap([10]i32, u16) = .init(gpa);
+    defer by_w.deinit();
+    try by_w.ensureTotalCapacity(@intCast(points.len));
+    for (points, 0..) |p, i| by_w.putAssumeCapacity(p.w, @intCast(i));
+    for (points, 0..) |a, i| {
+        for (e10.simple) |alpha| {
+            var t: [10]i32 = undefined;
+            for (&t, a.w, alpha) |*x, p, q| x.* = p + q;
+            const j = by_w.get(t) orelse continue;
+            // Already drawn as one of Lisi's 60° edges above.
+            if (a.in_e8 and points[j].in_e8 and e10.ip(a.w, points[j].w) == 1) continue;
+            const lo = @min(i, j);
+            const hi = @max(i, j);
+            try out.append(gpa, .{ @intCast(lo), @intCast(hi) });
         }
     }
     return out.toOwnedSlice(gpa);
@@ -359,7 +368,7 @@ fn actLadder(a: *App) void {
 }
 
 pub const actions = &[_]app_mod.ActionDef{
-    .{ .key = keys.domain_b, .help = "B: the Big Bang — wind time back to t = 0 (the E10 billiard)", .run = cinema.toggle },
+    .{ .key = keys.domain_b, .help = "B: the Big Bang — wind time back to t = 0 (the E10 billiard); ←/→ rotation is parked while it runs", .run = cinema.toggle },
     .{ .key = keys.domain_plus, .help = "+: raise the level — unveil the next field of M-theory", .run = actLevelUp },
     .{ .key = keys.domain_minus, .help = "-: lower the level", .run = actLevelDown },
     .{ .key = keys.domain_g, .help = "G: climb the 3-form ladder (metric → M2 → M5 → dual graviton)", .run = actLadder },
@@ -645,7 +654,8 @@ pub fn figure(a: *App, fig_id: []const u8, dots: []hud_mod.FigDot) usize {
         }
         if (want_levels) y = @as(f32, @floatFromInt(p.level)) * 0.26;
         const rgb = if (want_levels) fieldRgb(p.field) else classRgb(p.class);
-        dots[k] = .{ .x = x * 0.40, .y = y * (if (want_levels) @as(f32, 1.0) else 0.40), .rgb = .{
+        // Level-3 roots project past the figure box; clamp them to its edge.
+        dots[k] = .{ .x = std.math.clamp(x * 0.40, -1.0, 1.0), .y = std.math.clamp(y * (if (want_levels) @as(f32, 1.0) else 0.40), -1.0, 1.0), .rgb = .{
             @intFromFloat(rgb[0] * 255),
             @intFromFloat(rgb[1] * 255),
             @intFromFloat(rgb[2] * 255),

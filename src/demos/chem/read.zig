@@ -172,6 +172,7 @@ fn loadXyz(gpa: std.mem.Allocator, text: []const u8, max_atoms: usize) !Structur
     var atoms: std.ArrayList(Atom) = .empty;
     errdefer atoms.deinit(gpa);
     var title: []u8 = &.{};
+    errdefer if (title.len > 0) gpa.free(title);
     var it = std.mem.splitScalar(u8, text, '\n');
     var line_no: usize = 0;
     while (it.next()) |raw| : (line_no += 1) {

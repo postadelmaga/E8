@@ -22,9 +22,12 @@ pub fn init(a: *App) void {
     D.story(a);
 }
 
-/// Open or close the side panel — the window widens/narrows to make room. The
-/// window keeps the panel's width as a gutter on the right, so the figure stays
-/// centered in what is left instead of leaving a dead band of glass on the left.
+/// Open or close the side panel. The window does NOT change size: it keeps the
+/// panel's width as a gutter on the right and the scene re-centers in what is
+/// left. Widening the window on P — which is what this did — meant that starting
+/// the talk jumped the window under the presenter, undid a maximize, and on a
+/// small screen pushed the figure off the edge. The panel is a layer, not a
+/// second window: it costs the scene some width, and nothing else.
 pub fn setOpen(a: *App, on: bool) void {
     const st = a.pluginState(@This());
     if (st.on == on) return;
@@ -34,7 +37,6 @@ pub fn setOpen(a: *App, on: bool) void {
     a.reserve_w = extra;
     a.hud.gutter.store(extra, .monotonic);
     a.win.reserveGutter(extra);
-    a.win.requestResize(app_mod.win_w + extra, app_mod.win_h);
 }
 
 pub fn post(a: *App) void {

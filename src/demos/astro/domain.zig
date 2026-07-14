@@ -37,6 +37,9 @@ pub const Point = struct {
     /// Color index (BP−RP or B−V). NaN when the catalog has none.
     color_idx: f32 = 0,
     teff: f32 = 0,
+    /// Apparent flux relative to a 6th-magnitude star, clamped — what sizes the
+    /// dot and drives the glow. Resolved once here; descriptor() runs per frame.
+    flux: f32 = 1,
     row: u32 = 0,
 };
 
@@ -51,10 +54,10 @@ pub const plugins = .{
     @import("../../plugins/actions.zig"),
     @import("../../plugins/effects.zig"),
     @import("../../plugins/guide.zig"),
+    @import("../../plugins/inspector.zig"),
     @import("../../plugins/slides.zig"),
     @import("../../plugins/editor.zig"),
     @import("../../plugins/panel.zig"),
-    @import("../../plugins/inspector.zig"),
     @import("../../plugins/exporter.zig"),
     @import("../../plugins/atmosphere.zig"),
 };
@@ -193,6 +196,10 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
         p.teff = if (col_teff) |c| tbl.columns[c].nums[r] else std.math.nan(f32);
         if (std.math.isNan(p.color_idx) and !std.math.isNan(p.teff)) p.color_idx = indexFromTemp(p.teff);
         if (std.math.isNan(p.teff) and !std.math.isNan(p.color_idx)) p.teff = tempFromIndex(p.color_idx);
+        // Brighter stars are bigger and glow harder — apparent magnitude is a
+        // logarithm, so 5 magnitudes are a factor of 100 in flux.
+        const m6 = if (std.math.isNan(p.app_mag)) 6.0 else p.app_mag;
+        p.flux = std.math.clamp(std.math.pow(f32, 10.0, (6.0 - m6) / 5.0), 0.25, 6.0);
         try pts.append(gpa, p);
     }
     if (pts.items.len == 0) return error.NoUsableRows;
@@ -210,25 +217,14 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     radius2 = 1.0;
 
     // The nearest star to each star — the relation the framework walks, and the
-    // one question a catalog is always asked.
+    // one question a catalog is always asked. Brute force is O(n²), seconds at
+    // 20k stars; a uniform grid answers it exactly in a fraction of that.
     nn = try gpa.alloc(u16, out.len);
-    for (out, 0..) |*p, i| {
-        var best: usize = i;
-        var best_d: f32 = std.math.floatMax(f32);
-        for (out, 0..) |*q, j| {
-            if (i == j) continue;
-            var d: f32 = 0;
-            for (0..3) |k| {
-                const t = p.v[k] - q.v[k];
-                d += t * t;
-            }
-            if (d < best_d) {
-                best_d = d;
-                best = j;
-            }
-        }
-        nn[i] = @intCast(best);
+    errdefer {
+        gpa.free(nn);
+        nn = &.{};
     }
+    try nearestAll(gpa, out, nn);
 
     buildMenus();
     std.debug.print("catalog: {s} — {d} stars (of {d} rows) · out to {d:.1} pc · color: {s} · magnitudes: {s}\n", .{
@@ -240,6 +236,109 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
         if (col_mag != null) "yes" else "none",
     });
     return out;
+}
+
+/// Exact 1-NN on a uniform grid over the bounding box. Stars are bucketed into
+/// cells (CSR), and each query walks outward one Chebyshev shell of cells at a
+/// time: a point in a cell of shell r+1 is at least r whole cells away, so the
+/// search stops as soon as the best candidate beats that bound.
+fn nearestAll(gpa: std.mem.Allocator, pts: []const Point, out_nn: []u16) !void {
+    const n = pts.len;
+    if (n < 2) {
+        for (out_nn, 0..) |*x, i| x.* = @intCast(i);
+        return;
+    }
+    var lo = [3]f32{ std.math.floatMax(f32), std.math.floatMax(f32), std.math.floatMax(f32) };
+    var hi = [3]f32{ -std.math.floatMax(f32), -std.math.floatMax(f32), -std.math.floatMax(f32) };
+    for (pts) |p| {
+        for (0..3) |k| {
+            lo[k] = @min(lo[k], p.v[k]);
+            hi[k] = @max(hi[k], p.v[k]);
+        }
+    }
+    var side: f32 = 0;
+    for (0..3) |k| side = @max(side, hi[k] - lo[k]);
+    // Cubic cells, ~4 stars in each on average — coarse enough that the first
+    // shell almost always settles it.
+    const g: usize = @max(1, @min(32, @as(usize, @intFromFloat(@ceil(std.math.cbrt(@as(f64, @floatFromInt(n)) / 4.0))))));
+    const cell = @max(side / @as(f32, @floatFromInt(g)), 1e-9);
+
+    // CSR buckets: count, prefix-sum, fill.
+    const n_cells = g * g * g;
+    const start = try gpa.alloc(u32, n_cells + 1);
+    defer gpa.free(start);
+    @memset(start, 0);
+    const cell_of = try gpa.alloc(u32, n);
+    defer gpa.free(cell_of);
+    for (pts, 0..) |p, i| {
+        const c = gridCell(p.v, lo, cell, g);
+        cell_of[i] = @intCast((c[2] * g + c[1]) * g + c[0]);
+        start[cell_of[i] + 1] += 1;
+    }
+    for (0..n_cells) |c| start[c + 1] += start[c];
+    const order = try gpa.alloc(u32, n);
+    defer gpa.free(order);
+    const cursor = try gpa.alloc(u32, n_cells);
+    defer gpa.free(cursor);
+    @memcpy(cursor, start[0..n_cells]);
+    for (0..n) |i| {
+        order[cursor[cell_of[i]]] = @intCast(i);
+        cursor[cell_of[i]] += 1;
+    }
+
+    for (pts, 0..) |*p, i| {
+        const home = gridCell(p.v, lo, cell, g);
+        var best: usize = i;
+        var best_d: f32 = std.math.floatMax(f32); // squared
+        var r: usize = 0;
+        while (r < g) : (r += 1) {
+            // The cells at Chebyshev distance exactly r from home, clipped.
+            var z = home[2] -| r;
+            const z1 = @min(home[2] + r, g - 1);
+            while (z <= z1) : (z += 1) {
+                var y = home[1] -| r;
+                const y1 = @min(home[1] + r, g - 1);
+                while (y <= y1) : (y += 1) {
+                    var x = home[0] -| r;
+                    const x1 = @min(home[0] + r, g - 1);
+                    while (x <= x1) : (x += 1) {
+                        const dx = if (x > home[0]) x - home[0] else home[0] - x;
+                        const dy = if (y > home[1]) y - home[1] else home[1] - y;
+                        const dz = if (z > home[2]) z - home[2] else home[2] - z;
+                        if (@max(dx, @max(dy, dz)) != r) continue; // interior: already searched
+                        const c = (z * g + y) * g + x;
+                        for (order[start[c]..start[c + 1]]) |jj| {
+                            const j: usize = jj;
+                            if (j == i) continue;
+                            var d: f32 = 0;
+                            for (0..3) |k| {
+                                const t = p.v[k] - pts[j].v[k];
+                                d += t * t;
+                            }
+                            if (d < best_d) {
+                                best_d = d;
+                                best = j;
+                            }
+                        }
+                    }
+                }
+            }
+            // Anything not yet visited sits at least r whole cells away.
+            const bound = @as(f32, @floatFromInt(r)) * cell;
+            if (best_d <= bound * bound) break;
+        }
+        out_nn[i] = @intCast(best);
+    }
+}
+
+/// Which cell a position falls in, clamped to the grid.
+fn gridCell(v: [3]f32, lo: [3]f32, cell: f32, g: usize) [3]usize {
+    var c: [3]usize = undefined;
+    for (0..3) |k| {
+        const t = (v[k] - lo[k]) / cell;
+        c[k] = @min(@as(usize, @intFromFloat(@max(t, 0))), g - 1);
+    }
+    return c;
 }
 
 pub fn unload(gpa: std.mem.Allocator) void {
@@ -385,13 +484,9 @@ pub const actions = &[_]app_mod.ActionDef{
 
 pub fn descriptor(a: *App, i: usize) desc.Object {
     const p = &a.points[i];
-    // Brighter stars are bigger and glow harder — apparent magnitude is a
-    // logarithm, so 5 magnitudes are a factor of 100 in flux.
-    const m = if (std.math.isNan(p.app_mag)) 6.0 else p.app_mag;
-    const flux = std.math.clamp(std.math.pow(f32, 10.0, (6.0 - m) / 5.0), 0.25, 6.0);
     return .{
-        .radius = 0.5 + 0.45 * flux,
-        .glow = 0.7 + 0.5 * flux,
+        .radius = 0.5 + 0.45 * p.flux,
+        .glow = 0.7 + 0.5 * p.flux,
         .orbit_rgb = colorByStar(p, 0),
         // Hot stars scintillate faster: a cheap, honest cue for temperature.
         .pulse = .{

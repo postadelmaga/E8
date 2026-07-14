@@ -32,11 +32,23 @@ const deck_write = @import("deck_write");
 // --- what there is to open -------------------------------------------------------------------
 
 const Category = struct {
+    /// The name on the poster and in the dropdown. PLAIN, and short: the poster cuts
+    /// it with an ellipsis at about 186 px, and "Chemistry & structural biology" came
+    /// out as "Chemistry & struct…" — a label nobody chose to read.
     label: []const u8,
     /// The domain that reads this kind of thing.
     domain: []const u8,
     /// What its asset looks like ("" = it has none: the points are computed).
     asset: []const u8,
+    /// The one sentence the wizard says under the heading: what this field will DO
+    /// with the file, and which file it wants. It is the whole documentation a person
+    /// gets before they hand over their data, so it says both.
+    hint: []const u8 = "",
+    /// The extensions the domain can actually read — with the dot, lowercase. This is
+    /// the picker's filter AND the gate `createDemo` checks before it copies a byte:
+    /// a user once handed `astro` the 16 MB `e8-chem` executable, and every layer in
+    /// the way said yes.
+    exts: []const []const u8 = &.{},
     /// Which specialized tool the wizard offers.
     tool: enum { none, molecule, file },
 };
@@ -44,13 +56,86 @@ const Category = struct {
 /// The categories, and the tools each one gets. Every entry is a domain that
 /// already exists — the wizard picks one, it does not create one.
 const categories = [_]Category{
-    .{ .label = "Chemistry & structural biology", .domain = "chem", .asset = "PDB, XYZ", .tool = .molecule },
-    .{ .label = "Astronomy (star catalogs)", .domain = "astro", .asset = "CSV (Gaia, SIMBAD, HYG)", .tool = .file },
-    .{ .label = "Networks & graphs", .domain = "graph", .asset = "GraphML, edge list", .tool = .file },
-    .{ .label = "Data & tables", .domain = "data", .asset = "CSV, TSV", .tool = .file },
-    .{ .label = "Embeddings / ML", .domain = "embed", .asset = ".npy, CSV", .tool = .file },
-    .{ .label = "Mathematics & physics (slides only)", .domain = "lisi", .asset = "", .tool = .none },
+    .{
+        .label = "Molecules & proteins",
+        .domain = "chem",
+        .asset = "PDB, XYZ",
+        .hint = "Give it a structure (.pdb, .ent, .xyz, .cif) — or fetch one below by name. It draws the chains, the residues and the bonds, with a ruler in ångströms.",
+        .exts = &.{ ".pdb", ".ent", ".xyz", ".cif" },
+        .tool = .molecule,
+    },
+    .{
+        .label = "Astronomy — star catalogs",
+        .domain = "astro",
+        .asset = "CSV (Gaia, SIMBAD, HYG)",
+        .hint = "Give it a star catalog (.csv from Gaia, SIMBAD or HYG). Columns for right ascension, declination and magnitude are found by name.",
+        .exts = &.{ ".csv", ".tsv" },
+        .tool = .file,
+    },
+    .{
+        .label = "Networks & graphs",
+        .domain = "graph",
+        .asset = "GraphML, edge list",
+        .hint = "Give it a network (.graphml, .gml, or an edge list — two node names per line). It is laid out by its own Laplacian spectrum.",
+        .exts = &.{ ".graphml", ".gml", ".edges", ".txt", ".csv" },
+        .tool = .file,
+    },
+    .{
+        .label = "Tables & spreadsheets",
+        .domain = "data",
+        .asset = "CSV, TSV",
+        .hint = "Give it a table (.csv or .tsv, with a header row). The numeric columns become the space, and it turns on its own principal axes.",
+        .exts = &.{ ".csv", ".tsv" },
+        .tool = .file,
+    },
+    .{
+        .label = "Embeddings & vectors",
+        .domain = "embed",
+        .asset = ".npy, CSV",
+        .hint = "Give it vectors (.npy, or a .csv with one row per point). It shows PCA and t-SNE of the same points, side by side.",
+        .exts = &.{ ".npy", ".csv" },
+        .tool = .file,
+    },
+    .{
+        .label = "Maths & physics — slides only",
+        .domain = "lisi",
+        .asset = "",
+        .hint = "This field computes its own points: no file to give it. What you write here are the slides.",
+        .exts = &.{},
+        .tool = .none,
+    },
 };
+
+/// The dropdown's labels, and they are a GLOBAL on purpose: `dropdown` stashes the
+/// slice it was given and paints the open list at the very end of the frame, in
+/// `Ui.end()` — long after the function that built it returned. Handed a stack array,
+/// it is holding a pointer into a dead frame.
+const category_names = blk: {
+    var n: [categories.len][]const u8 = undefined;
+    for (categories, 0..) |cat, i| n[i] = cat.label;
+    break :blk n;
+};
+
+/// An asset bigger than this is not an asset. Said out loud because the alternative
+/// is a silent 16 MB copy into `demos-user/`, which is exactly what happened.
+const max_asset_bytes: u64 = 64 << 20;
+
+/// ".csv, .tsv" — for the sentence that tells someone what they should have picked.
+fn extList(cat: Category, buf: []u8) []const u8 {
+    var w: std.Io.Writer = .fixed(buf);
+    for (cat.exts, 0..) |e, i| {
+        if (i > 0) w.writeAll(", ") catch break;
+        w.writeAll(e) catch break;
+    }
+    return w.buffered();
+}
+
+fn extAllowed(cat: Category, path: []const u8) bool {
+    const ext = std.fs.path.extension(path);
+    if (ext.len == 0) return false;
+    for (cat.exts) |e| if (std.ascii.eqlIgnoreCase(ext, e)) return true;
+    return false;
+}
 
 const Builtin = struct {
     domain: []const u8,
@@ -102,6 +187,42 @@ const Menu = struct {
 
     mine: std.ArrayList(UserDemo) = .empty,
     mine_loaded: bool = false,
+    /// Directories under demos-user/ whose manifest would not read or parse. The
+    /// demos are still on disk — the wall says so, instead of quietly hanging
+    /// fewer posters than there are folders.
+    broken: std.ArrayList(u8) = .empty, // the dirnames, comma-joined
+    broken_count: usize = 0,
+
+    /// Hand `--gpu` to the demos this launcher starts. OFF by default: the zrame
+    /// dmabuf plane ignores fractional scaling, so on a scaled desktop the GPU
+    /// frame comes out oversized and off-center (the README says why at length).
+    gpu: bool = false,
+
+    /// The last child launched, watched through its first two seconds: a demo
+    /// that dies at startup would otherwise look like a click that did nothing —
+    /// "opened chem" said the launcher, and no window ever came.
+    watch_pid: ?std.posix.pid_t = null,
+    watch_name: [64]u8 = undefined,
+    watch_len: usize = 0,
+    /// The asset that child was given, if any — the noun in "astro could not open X".
+    watch_asset: [64]u8 = undefined,
+    watch_asset_len: usize = 0,
+    watch_until: i64 = 0,
+
+    /// Where the children's stderr goes: one file, rewritten on every launch, read
+    /// back by `watchChild` when a child dies young.
+    ///
+    /// A PIPE would be the obvious thing and it is the wrong thing. The launcher only
+    /// looks at the child for two seconds; after that it goes back to being a window,
+    /// and nothing is reading. A demo that logs steadily would then fill the pipe's
+    /// 64 KB and BLOCK ON ITS OWN LOGGING, forever, because of a launcher that had
+    /// stopped caring. A file cannot fill. (`/tmp` and not `demos-user/`: the launcher
+    /// may well be run from a directory it cannot write.)
+    err_log: [64]u8 = undefined,
+    err_log_len: usize = 0,
+    /// The last launch really did redirect: without this, an unreadable log and a
+    /// child that printed nothing are the same thing, and they are not.
+    watch_logged: bool = false,
 
     /// Hover, one animated 0..1 per poster, keyed by the card's index in the frame.
     /// The toolkit keeps its own hover animation, but only for its own widgets — a
@@ -131,13 +252,21 @@ const Menu = struct {
     /// look up again, and the dialog silently never appeared. The request is carried
     /// out at the root scope instead, where `dialogOpen` will recognize it.
     wizard_wanted: bool = false,
+    /// The wizard was opened from a poster, so the field is already DECIDED. A
+    /// dropdown then has nothing to ask and everything to confuse: you clicked
+    /// "Astronomy", and the first thing the dialog did was ask you which field you
+    /// wanted. Only "+ New demo" leaves this false.
+    cat_locked: bool = false,
 
     fn say(m: *Menu, msg: []const u8) void {
         m.note.clearRetainingCapacity();
         m.note.appendSlice(m.gpa, msg) catch {};
     }
     fn sayFmt(m: *Menu, comptime f: []const u8, args: anytype) void {
-        var buf: [256]u8 = undefined;
+        // 512, not 256: the note now carries a demo's own error message, and a message
+        // that overran this buffer used to become a single "…" — the failure mode of a
+        // thing whose entire job is to say what went wrong.
+        var buf: [512]u8 = undefined;
         m.say(std.fmt.bufPrint(&buf, f, args) catch "…");
     }
 };
@@ -199,6 +328,7 @@ fn startJob(m: *Menu, kind: @FieldType(JobArgs, "kind"), query: []const u8) void
             return;
         },
     };
+    m.job.elen = 0; // a fresh job clears the last failure
     m.job.state.store(1, .release);
     m.job.thread = std.Thread.spawn(.{}, jobRun, .{args}) catch {
         m.job.state.store(0, .release);
@@ -219,6 +349,7 @@ fn reapJob(m: *Menu) void {
             if (m.got) |g| g.deinit(m.gpa);
             m.got = m.job.asset;
             m.job.asset = null;
+            m.job.elen = 0;
             m.job.state.store(0, .release);
             m.asset_path.clearRetainingCapacity();
             if (m.got) |g| {
@@ -270,19 +401,153 @@ fn launch(m: *Menu, domain: []const u8, asset: ?[]const u8, deck: ?[]const u8, e
         argv.append(gpa, deck_arg.?) catch return;
     }
     if (editor) argv.append(gpa, "--editor") catch return;
-    argv.append(gpa, "--gpu") catch return;
+    // Software rendering is the default for a reason (fractional scaling, see the
+    // struct field) — the GPU is something you ask for, per session, with the
+    // header's checkbox.
+    if (m.gpu) argv.append(gpa, "--gpu") catch return;
 
-    _ = std.process.spawn(m.io, .{
+    // The child's stderr goes to a file, so that when it dies at startup the launcher
+    // can say WHY instead of telling a person with no terminal to go find one. See
+    // `Menu.err_log` for why a file and not a pipe.
+    var log_file: ?std.Io.File = null;
+    const log = m.err_log[0..m.err_log_len];
+    if (log.len > 0) {
+        log_file = std.Io.Dir.cwd().createFile(m.io, log, .{ .truncate = true }) catch null;
+    }
+    // The parent's copy of the fd is closed as soon as the child is spawned — the
+    // child dup'd its own, and holding this one open would keep the file's writer
+    // count above zero for as long as the launcher lives.
+    defer if (log_file) |f| f.close(m.io);
+    const stderr: std.process.SpawnOptions.StdIo = if (log_file) |f| .{ .file = f } else .inherit;
+
+    const child = std.process.spawn(m.io, .{
         .argv = argv.items,
         .environ_map = m.env,
         .stdin = .ignore,
+        .stderr = stderr,
     }) catch |e| {
         m.sayFmt("will not start: {s} ({s})", .{ exe, @errorName(e) });
         return;
     };
     // Deliberately not waited on: the demo is a sibling window, not a subroutine.
-    // The launcher stays open so you can start another.
+    // The launcher stays open so you can start another. It IS glanced at, though —
+    // `watchChild` polls this pid for two seconds, because a child that dies at
+    // startup makes "opened" below a lie.
+    if (child.id) |pid| {
+        m.watch_pid = pid;
+        const cut = @min(domain.len, m.watch_name.len);
+        @memcpy(m.watch_name[0..cut], domain[0..cut]);
+        m.watch_len = cut;
+        m.watch_asset_len = 0;
+        if (asset) |a| {
+            const base = std.fs.path.basename(a);
+            const acut = @min(base.len, m.watch_asset.len);
+            @memcpy(m.watch_asset[0..acut], base[0..acut]);
+            m.watch_asset_len = acut;
+        }
+        m.watch_logged = log_file != null;
+        m.watch_until = widget.nowMs() + 2000;
+    }
     m.sayFmt("opened {s}", .{domain});
+}
+
+/// A line of the child's stderr that looks like part of an error return trace rather
+/// than the error: the source path with an address in it, and the echoed source line
+/// with its `^~~~` underneath, which Zig indents.
+fn looksLikeFrame(raw: []const u8) bool {
+    if (raw.len == 0) return false;
+    if (raw[0] == ' ' or raw[0] == '\t') return true;
+    if (raw[0] == '/') return true;
+    return std.mem.indexOf(u8, raw, ": 0x") != null;
+}
+
+/// The one line of the dead child's stderr worth showing in a footer.
+///
+/// Read from the BOTTOM up, because whatever a program says last is what killed it —
+/// but not blindly: when a demo returns an error from `main`, Zig prints `error: X`
+/// and then the return trace UNDERNEATH it, so the strictly-last line is a stack frame
+/// and the strictly-last line is not what anyone wants to read. So: the last line that
+/// names an error wins; failing that, the last line that is not a frame; failing that,
+/// the last line there is.
+///
+/// The child is known to be dead when this runs, so the file is complete and there is
+/// nothing to race with. (This is also why stderr goes to a file at all — see
+/// `Menu.err_log`.)
+fn lastErrorLine(m: *Menu, buf: []u8) []const u8 {
+    if (!m.watch_logged or m.err_log_len == 0) return "";
+    const gpa = m.gpa;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(m.io, m.err_log[0..m.err_log_len], gpa, .limited(1 << 20)) catch return "";
+    defer gpa.free(bytes);
+
+    var best: []const u8 = ""; // the last non-frame line
+    var any: []const u8 = ""; // the last line of any kind
+    var it = std.mem.splitBackwardsScalar(u8, bytes, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        // `^~~~~`, the underline Zig draws under the source line of a frame: never a
+        // message, and it is the very last line of an error return trace.
+        if (std.mem.indexOfNone(u8, line, "^~") == null) continue;
+        if (any.len == 0) any = line;
+        // `error: NoSkyCoordinates`, and `error(astro): …` from std.log — both.
+        if (std.mem.startsWith(u8, line, "error")) {
+            best = line;
+            break;
+        }
+        if (best.len == 0 and !looksLikeFrame(raw)) best = line;
+    }
+    const pick_line = if (best.len > 0) best else any;
+    // The note is one line in a footer, not a log viewer.
+    const cut = @min(pick_line.len, buf.len);
+    @memcpy(buf[0..cut], pick_line[0..cut]);
+    return buf[0..cut];
+}
+
+/// The glance the launch promised: reap the last child non-blockingly, and if it is
+/// already gone, say why — in the launcher, in one line. "Run it from a terminal to
+/// see the error" was the launcher admitting it had thrown the error away.
+fn watchChild(m: *Menu) void {
+    const pid = m.watch_pid orelse return;
+    const linux = std.os.linux;
+    var status: u32 = undefined;
+    const rc = linux.waitpid(pid, &status, linux.W.NOHANG);
+    if (linux.errno(rc) != .SUCCESS) {
+        m.watch_pid = null; // nothing to wait for — stop asking
+        return;
+    }
+    if (rc == 0) { // still alive
+        if (widget.nowMs() > m.watch_until) m.watch_pid = null; // it survived: it is a window now
+        return;
+    }
+    m.watch_pid = null;
+    const name = m.watch_name[0..m.watch_len];
+    const asset = m.watch_asset[0..m.watch_asset_len];
+
+    // A clean exit inside the watch window is still a death — a demo that meant to
+    // open a window does not return 0 in half a second either. But status 0 with no
+    // complaint on stderr is not worth alarming anyone about.
+    var lbuf: [200]u8 = undefined;
+    var line = lastErrorLine(m, &lbuf);
+    // Zig's own prefix, said once. "astro could not open “x.csv”: error: NoSky…" reads
+    // like a stutter; the launcher already said something went wrong.
+    if (std.mem.startsWith(u8, line, "error: ")) line = line["error: ".len..];
+
+    if (line.len > 0) {
+        if (asset.len > 0) {
+            m.sayFmt("{s} could not open “{s}”: {s}", .{ name, asset, line });
+        } else {
+            m.sayFmt("{s} died at startup: {s}", .{ name, line });
+        }
+        return;
+    }
+    // It said nothing. All that is left is how it went.
+    if (linux.W.IFSIGNALED(status)) {
+        m.sayFmt("{s} died immediately (signal {d}) and said nothing", .{ name, @intFromEnum(linux.W.TERMSIG(status)) });
+    } else if (linux.W.IFEXITED(status) and linux.W.EXITSTATUS(status) != 0) {
+        m.sayFmt("{s} exited immediately (status {d}) and said nothing", .{ name, linux.W.EXITSTATUS(status) });
+    } else {
+        m.sayFmt("{s} exited immediately", .{name});
+    }
 }
 
 // --- the user's demos on disk ---------------------------------------------------------------------
@@ -297,6 +562,8 @@ fn loadMine(m: *Menu) void {
     }
     m.mine.clearRetainingCapacity();
     m.mine_loaded = true;
+    m.broken.clearRetainingCapacity();
+    m.broken_count = 0;
 
     var root = std.Io.Dir.cwd().openDir(m.io, user_root, .{ .iterate = true }) catch return;
     defer root.close(m.io);
@@ -305,9 +572,18 @@ fn loadMine(m: *Menu) void {
         if (entry.kind != .directory) continue;
         const path = std.fmt.allocPrint(gpa, "{s}/{s}/manifest.zon", .{ user_root, entry.name }) catch continue;
         defer gpa.free(path);
-        const bytes = std.Io.Dir.cwd().readFileAllocOptions(m.io, path, gpa, .limited(1 << 16), .of(u8), 0) catch continue;
+        // A manifest that will not read or parse still gets its directory NAMED —
+        // an authored demo that just vanishes from the wall is a demo the author
+        // will go looking for in the wrong places.
+        const bytes = std.Io.Dir.cwd().readFileAllocOptions(m.io, path, gpa, .limited(1 << 16), .of(u8), 0) catch {
+            markBroken(m, entry.name);
+            continue;
+        };
         defer gpa.free(bytes);
-        const man = std.zon.parse.fromSliceAlloc(Manifest, gpa, bytes, null, .{ .ignore_unknown_fields = true }) catch continue;
+        const man = std.zon.parse.fromSliceAlloc(Manifest, gpa, bytes, null, .{ .ignore_unknown_fields = true }) catch {
+            markBroken(m, entry.name);
+            continue;
+        };
         defer std.zon.parse.free(gpa, man);
 
         const d: UserDemo = .{
@@ -323,6 +599,12 @@ fn loadMine(m: *Menu) void {
             gpa.free(d.asset);
         };
     }
+}
+
+fn markBroken(m: *Menu, dirname: []const u8) void {
+    if (m.broken.items.len > 0) m.broken.appendSlice(m.gpa, ", ") catch {};
+    m.broken.appendSlice(m.gpa, dirname) catch {};
+    m.broken_count += 1;
 }
 
 /// Write the demo out: the directory, the manifest, the asset, and a deck with one
@@ -342,9 +624,59 @@ fn createDemo(m: *Menu) void {
         return;
     }
 
-    const slug = fetch.slugify(gpa, m.demo_name.items) catch return;
+    // --- the asset is checked BEFORE anything is written ----------------------------
+    //
+    // Not after `createDirPath`, not after the copy: a demo that turns out to be
+    // impossible must leave nothing behind, and a refusal that arrives after 16 MB
+    // have already been copied is not a refusal. This is the gate that was missing —
+    // `astro` was handed the `e8-chem` executable, the launcher copied it in, wrote a
+    // manifest that named it as the star catalog, and only the demo itself objected,
+    // by dying.
+    if (needs_asset and !from_net) {
+        const path = m.asset_path.items;
+        if (!extAllowed(cat, path)) {
+            var ebuf: [64]u8 = undefined;
+            m.sayFmt("{s} reads {s} ({s}) — “{s}” is not one. Pick another file.", .{
+                cat.domain,
+                cat.asset,
+                extList(cat, &ebuf),
+                std.fs.path.basename(path),
+            });
+            return;
+        }
+        const st = std.Io.Dir.cwd().statFile(m.io, path, .{}) catch |e| {
+            m.sayFmt("cannot read “{s}”: {s}", .{ std.fs.path.basename(path), @errorName(e) });
+            return;
+        };
+        if (st.kind != .file) {
+            m.sayFmt("“{s}” is not a file", .{std.fs.path.basename(path)});
+            return;
+        }
+        if (st.size > max_asset_bytes) {
+            m.sayFmt("“{s}” is {d} MB — too big to copy into a demo (the limit is {d} MB). Cut it down first.", .{
+                std.fs.path.basename(path),
+                st.size >> 20,
+                max_asset_bytes >> 20,
+            });
+            return;
+        }
+    }
+    if (from_net and m.got.?.bytes.len > max_asset_bytes) {
+        m.sayFmt("the download is {d} MB — too big to copy into a demo", .{m.got.?.bytes.len >> 20});
+        return;
+    }
+
+    // Every failure below SAYS SO. A wizard whose "create" does nothing and says
+    // nothing is indistinguishable from a wizard that is broken — because it is.
+    const slug = fetch.slugify(gpa, m.demo_name.items) catch {
+        m.say("out of memory");
+        return;
+    };
     defer gpa.free(slug);
-    const dir = std.fmt.allocPrint(gpa, "{s}/{s}", .{ user_root, slug }) catch return;
+    const dir = std.fmt.allocPrint(gpa, "{s}/{s}", .{ user_root, slug }) catch {
+        m.say("out of memory");
+        return;
+    };
     defer gpa.free(dir);
 
     std.Io.Dir.cwd().createDirPath(m.io, dir) catch |e| {
@@ -357,7 +689,10 @@ fn createDemo(m: *Menu) void {
     defer if (asset_rel) |a| gpa.free(a);
     if (needs_asset) {
         const base = if (from_net) m.got.?.name else std.fs.path.basename(m.asset_path.items);
-        asset_rel = std.fmt.allocPrint(gpa, "{s}/{s}", .{ dir, base }) catch return;
+        asset_rel = std.fmt.allocPrint(gpa, "{s}/{s}", .{ dir, base }) catch {
+            m.say("out of memory");
+            return;
+        };
         if (from_net) {
             std.Io.Dir.cwd().writeFile(m.io, .{ .sub_path = asset_rel.?, .data = m.got.?.bytes }) catch |e| {
                 m.sayFmt("cannot write the asset: {s}", .{@errorName(e)});
@@ -374,7 +709,10 @@ fn createDemo(m: *Menu) void {
     // The name goes into two .zon files as a string literal, and it is whatever the
     // author typed — a quote or a backslash in it would leave behind a demo that
     // nothing can parse, including the launcher that wrote it.
-    const name_zon = deck_write.escapeAlloc(gpa, m.demo_name.items) catch return;
+    const name_zon = deck_write.escapeAlloc(gpa, m.demo_name.items) catch {
+        m.say("out of memory");
+        return;
+    };
     defer gpa.free(name_zon);
 
     // The manifest.
@@ -391,15 +729,27 @@ fn createDemo(m: *Menu) void {
             name_zon,
             cat.domain,
             if (asset_rel) |a| std.fs.path.basename(a) else "",
-        }) catch return;
+        }) catch {
+            m.say("out of memory");
+            return;
+        };
         defer gpa.free(man);
-        const p = std.fmt.allocPrint(gpa, "{s}/manifest.zon", .{dir}) catch return;
+        const p = std.fmt.allocPrint(gpa, "{s}/manifest.zon", .{dir}) catch {
+            m.say("out of memory");
+            return;
+        };
         defer gpa.free(p);
-        std.Io.Dir.cwd().writeFile(m.io, .{ .sub_path = p, .data = man }) catch return;
+        std.Io.Dir.cwd().writeFile(m.io, .{ .sub_path = p, .data = man }) catch |e| {
+            m.sayFmt("cannot write the manifest: {s}", .{@errorName(e)});
+            return;
+        };
     }
 
     // The deck: one slide, so the editor opens onto something rather than nothing.
-    const deck_path = std.fmt.allocPrint(gpa, "{s}/deck.zon", .{dir}) catch return;
+    const deck_path = std.fmt.allocPrint(gpa, "{s}/deck.zon", .{dir}) catch {
+        m.say("out of memory");
+        return;
+    };
     defer gpa.free(deck_path);
     {
         const d = std.fmt.allocPrint(gpa,
@@ -414,9 +764,15 @@ fn createDemo(m: *Menu) void {
             \\    }},
             \\}}
             \\
-        , .{ slug, name_zon }) catch return;
+        , .{ slug, name_zon }) catch {
+            m.say("out of memory");
+            return;
+        };
         defer gpa.free(d);
-        std.Io.Dir.cwd().writeFile(m.io, .{ .sub_path = deck_path, .data = d }) catch return;
+        std.Io.Dir.cwd().writeFile(m.io, .{ .sub_path = deck_path, .data = d }) catch |e| {
+            m.sayFmt("cannot write the deck: {s}", .{@errorName(e)});
+            return;
+        };
     }
 
     m.mine_loaded = false; // it will show up among the posters
@@ -429,7 +785,7 @@ fn createDemo(m: *Menu) void {
 // A launcher is a shelf, not a form. What a person wants to see when it opens is
 // WHAT THEY CAN WATCH — so the window is a grid of posters, one per demo, and a
 // click on a poster plays it. The tabs, the buttons and the lists are gone; the
-// wizard is where it belongs, behind a "+ Nuova demo" card, in a dialog.
+// wizard is where it belongs, behind a "+ New demo" card, in a dialog.
 //
 // The posters are DRAWN, not loaded. A thumbnail file per demo would be a build
 // artifact to keep in sync with a scene it only approximates; instead each domain
@@ -439,9 +795,36 @@ fn createDemo(m: *Menu) void {
 
 const Art = enum { roots, e10, polytope, mol, chem, astro, graph, data, embed, plus };
 
-const card_w: f32 = 210;
+/// The card was 210 px wide, full stop, and a row was however many of those fitted —
+/// which on a 980 px window meant four cards and a 200 px band of nothing down the
+/// right-hand side, every time. A wall with a margin that wide does not look like a
+/// wall, it looks like a mistake. So the width is DERIVED: as many cards as fit at
+/// the minimum, then widened to share out what is left, up to a maximum past which a
+/// poster stops looking like a poster.
+const card_w_min: f32 = 200;
+const card_w_max: f32 = 260;
 const card_h: f32 = 176;
 const poster_h: f32 = 112;
+
+/// The footer is a fixed strip, always reserved, whether or not there is anything to
+/// say in it. It used to appear only when there was a note — and every note the
+/// launcher printed shortened the wall by 34 px, so the posters jumped under the
+/// pointer at exactly the moment the person was reading about what they had clicked.
+const foot_h: f32 = 46;
+
+const Grid = struct { per: usize, w: f32 };
+
+/// How many posters on a line, and how wide each. `allocRect` puts a `theme.gap`
+/// after every card, so n of them span `n*w + (n-1)*gap`.
+fn grid(ui: *widget.Ui) Grid {
+    const g = ui.theme.gap;
+    const avail = ui.availW();
+    const fit_n = @floor((avail + g) / (card_w_min + g));
+    const n: usize = @intFromFloat(@max(1, fit_n));
+    const nf: f32 = @floatFromInt(n);
+    const share = (avail - g * (nf - 1)) / nf;
+    return .{ .per = n, .w = std.math.clamp(share, card_w_min, card_w_max) };
+}
 
 /// The palette a poster is painted in: the two ends of its background gradient, and
 /// the ink its shapes are drawn with.
@@ -685,13 +1068,15 @@ fn card(
     ui: *widget.Ui,
     m: *Menu,
     slot: usize,
+    /// Whatever `grid` worked out this frame — a card no longer knows how wide it is.
+    w: f32,
     art: Art,
     title: []const u8,
     sub: []const u8,
     editable: bool,
 ) Pick {
     const t_theme = ui.theme;
-    const r = ui.allocRect(card_w, card_h);
+    const r = ui.allocRect(w, card_h);
 
     const id = ui.makeId("card");
     const edit_id = ui.makeId("card_edit");
@@ -700,7 +1085,7 @@ fn card(
     // so asking in this order is what keeps a click on the pencil from also being a
     // click on the poster underneath it.
     var pick: Pick = .none;
-    const pencil = widget.Rect{ .x = r.x + card_w - 34, .y = r.y + 8, .w = 26, .h = 26 };
+    const pencil = widget.Rect{ .x = r.x + w - 34, .y = r.y + 8, .w = 26, .h = 26 };
     const esig = if (editable) ui.interact(edit_id, pencil) else widget.Ui.Sig{};
     if (esig.clicked) pick = .edit;
 
@@ -771,15 +1156,14 @@ fn shelfTitle(ui: *widget.Ui, s: []const u8) void {
     ui.gap(2);
 }
 
-fn perRow(ui: *widget.Ui) usize {
-    const avail = ui.availW();
-    const n: usize = @intFromFloat(@max(1, @floor(avail / (card_w + ui.theme.gap))));
-    return @max(1, n);
-}
-
 fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     const m: *Menu = @ptrCast(@alignCast(user.?));
     reapJob(m);
+    watchChild(m);
+    // While a freshly launched child is on watch, keep the frames coming — an idle
+    // UI would not poll again until the mouse moved, and the two seconds would
+    // stretch to whenever.
+    if (m.watch_pid != null) ui.animating = true;
 
     // The room the posters hang in: darker than the toolkit's own surface, so the
     // cards read as lit and the window as unlit.
@@ -791,27 +1175,44 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     ui.textLine("E8", 26, .bold, ui.theme.accent);
     ui.gap(8);
     ui.textLine("interactive papers", 15, .regular, ui.theme.text_dim);
+    // The one global setting there is. Off by default: on a fractionally scaled
+    // desktop the GPU frame comes out oversized and off-center (see the README).
+    ui.gap(24);
+    _ = ui.checkbox("GPU rendering", &m.gpu);
+    ui.tooltip("start demos with --gpu — pretty on scale-1 displays; oversized on fractionally scaled desktops, so software is the default");
     ui.endRow();
     ui.gap(2);
 
-    const foot: f32 = if (m.note.items.len > 0) 42 else 8;
-    const view_h = @max(200, ui.bounds.h - 96 - foot);
+    // The note renders down here only while no dialog is up — the wizard paints a
+    // dim overlay over everything at the root, so while it is open the note shows
+    // inside the dialog instead (see `wizard`), where the person who caused it is
+    // actually looking.
+    const note_at_root = m.note.items.len > 0 and !ui.dialogOpen("wizard");
+
+    // Where the wall actually begins. The old code SUBTRACTED A GUESS — 96 px for a
+    // header whose real height is whatever the font and the checkbox came to — and
+    // guessed high, so the last row of posters was clipped through its middle for no
+    // reason. A zero-height rect claims nothing and reports exactly where the cursor
+    // is; `gap` undoes the advance `allocRect` makes after it. Measure, do not guess.
+    const probe = ui.allocRect(0, 0);
+    ui.gap(-ui.theme.gap);
+    const view_h = @max(200, (ui.bounds.y + ui.bounds.h) - probe.y - foot_h);
     ui.beginScroll("wall", view_h);
 
     var slot: usize = 0;
 
     // What you made comes first — it is the reason you opened this.
     if (!m.mine_loaded) loadMine(m);
-    if (m.mine.items.len > 0) {
+    if (m.mine.items.len > 0 or m.broken_count > 0) {
         shelfTitle(ui, "Your demos");
-        const per = perRow(ui);
+        const g = grid(ui);
         var col: usize = 0;
         for (m.mine.items) |d| {
             if (col == 0) ui.beginRow();
             ui.pushIdScopeIndex(slot);
             var buf: [96]u8 = undefined;
             const sub = std.fmt.bufPrint(&buf, "{s} · {s}", .{ d.domain, if (d.asset.len > 0) d.asset else "slides only" }) catch d.domain;
-            switch (card(ui, m, slot, artOf(d.domain), d.name, sub, true)) {
+            switch (card(ui, m, slot, g.w, artOf(d.domain), d.name, sub, true)) {
                 .play => openMine(m, d, false),
                 .edit => openMine(m, d, true),
                 .none => {},
@@ -819,25 +1220,37 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
             ui.popIdScope();
             slot += 1;
             col += 1;
-            if (col == per) {
+            if (col == g.per) {
                 ui.endRow();
                 col = 0;
             }
         }
         if (col > 0) ui.endRow();
+        // The demos that COULD NOT hang: name the directories, so the fix is a
+        // text editor away rather than a mystery.
+        if (m.broken_count > 0) {
+            var bbuf: [256]u8 = undefined;
+            const line = std.fmt.bufPrint(&bbuf, "{d} demo{s} in {s}/ with a broken manifest: {s}", .{
+                m.broken_count,
+                if (m.broken_count == 1) @as([]const u8, "") else "s",
+                user_root,
+                m.broken.items,
+            }) catch "some demos in demos-user/ have a broken manifest";
+            ui.textLine(line, 13, .regular, ui.theme.danger.withAlpha(0.85));
+        }
         ui.gap(10);
     }
 
     // The demos that need nothing: they compute their own points.
     shelfTitle(ui, "Ready to watch");
     {
-        const per = perRow(ui);
+        const g = grid(ui);
         var col: usize = 0;
         for (builtins) |b| {
             if (b.needs_asset) continue;
             if (col == 0) ui.beginRow();
             ui.pushIdScopeIndex(slot);
-            switch (card(ui, m, slot, artOf(b.domain), b.title, b.blurb, true)) {
+            switch (card(ui, m, slot, g.w, artOf(b.domain), b.title, b.blurb, true)) {
                 .play => launch(m, b.domain, null, null, false),
                 .edit => launch(m, b.domain, null, null, true),
                 .none => {},
@@ -845,7 +1258,7 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
             ui.popIdScope();
             slot += 1;
             col += 1;
-            if (col == per) {
+            if (col == g.per) {
                 ui.endRow();
                 col = 0;
             }
@@ -858,33 +1271,38 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     // which is the only honest thing a poster with no data behind it can do.
     shelfTitle(ui, "Bring your own data");
     {
-        const per = perRow(ui);
+        const g = grid(ui);
         var col: usize = 0;
         for (categories, 0..) |cat, ci| {
             if (col == 0) ui.beginRow();
             ui.pushIdScopeIndex(slot);
             const sub = if (cat.asset.len > 0) cat.asset else "no file needed: slides only";
-            if (card(ui, m, slot, artOf(cat.domain), cat.label, sub, false) == .play) {
+            if (card(ui, m, slot, g.w, artOf(cat.domain), cat.label, sub, false) == .play) {
                 m.cat = ci;
+                // Clicked from a poster: the field is settled, and the wizard must not
+                // ask again.
+                m.cat_locked = true;
                 m.wizard_wanted = true;
             }
             ui.popIdScope();
             slot += 1;
             col += 1;
-            if (col == per) {
+            if (col == g.per) {
                 ui.endRow();
                 col = 0;
             }
         }
         // The plus card lives at the end of the same shelf: it is the same wizard,
-        // just without a category chosen for you.
-        if (col == per) {
+        // just without a category chosen for you — so it is the ONLY card that leaves
+        // the field dropdown up.
+        if (col == g.per) {
             ui.endRow();
             col = 0;
         }
         if (col == 0) ui.beginRow();
         ui.pushIdScopeIndex(slot);
-        if (card(ui, m, slot, .plus, "New demo", "hand it a file, get a presentation", false) == .play) {
+        if (card(ui, m, slot, g.w, .plus, "New demo", "hand it a file, get a presentation", false) == .play) {
+            m.cat_locked = false;
             m.wizard_wanted = true;
         }
         ui.popIdScope();
@@ -901,10 +1319,16 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
         ui.openDialog("wizard");
     }
 
-    if (m.note.items.len > 0) {
-        ui.gap(6);
+    // The footer strip: its height was reserved above whether or not there is anything
+    // in it, so a note appearing does not shove the wall upward.
+    if (note_at_root) {
         ui.separator();
-        ui.labelDim(m.note.items);
+        ui.gap(4);
+        // ONE line, cut to the window: `labelDim` wraps, and a wrapped note would grow
+        // out of the strip whose height the wall already gave up — which is the reflow
+        // this footer exists to prevent. A demo's error message can be long.
+        var nbuf: [512]u8 = undefined;
+        ui.textLine(fit(ui, m.note.items, 13, .regular, ui.availW(), &nbuf), 13, .regular, ui.theme.text_dim);
     }
 
     wizard(ui, m);
@@ -912,34 +1336,62 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
 
 // --- the wizard, now a dialog ------------------------------------------------------------------
 
+/// The wizard reads DOWNWARD, in the order the thing actually happens: which field,
+/// then the file, then the name, then create. It used to open by asking a question the
+/// person had already answered by clicking a poster ("field: [Astronomy ▾]"), and to
+/// leave the name for last, below a separator, looking like a footnote rather than the
+/// second of two steps.
 fn wizard(ui: *widget.Ui, m: *Menu) void {
     if (!ui.dialogOpen("wizard")) return;
-    if (!ui.beginDialog("wizard", "New demo", 560, 520)) return;
+    if (!ui.beginDialog("wizard", "New demo", 600, 600)) return;
     defer ui.endDialog();
 
-    var names: [categories.len][]const u8 = undefined;
-    for (categories, 0..) |cat, i| names[i] = cat.label;
-
-    ui.labelDim("field");
-    _ = ui.dropdown("cat", &names, &m.cat);
+    // The field. Decided already if a poster opened this — so it is a HEADING, not a
+    // question. Only "+ New demo", which chose nothing for you, still asks.
+    if (m.cat_locked) {
+        ui.heading(categories[m.cat].label);
+    } else {
+        ui.labelDim("field");
+        _ = ui.dropdown("cat", &category_names, &m.cat);
+    }
     const cat = categories[m.cat];
 
-    ui.gap(4);
+    // One sentence: what it will do with your file, and which file it wants. That is
+    // the whole of what a person needs before they hand over their data, and until now
+    // the only place it was written down was the source of the domain that reads it.
+    if (cat.hint.len > 0) ui.labelDim(cat.hint);
+
+    ui.gap(6);
     switch (cat.tool) {
-        .molecule => toolMolecule(ui, m),
-        .file => toolFile(ui, m, cat),
-        .none => ui.labelDim("This field computes its own points: no file needed — just write the slides."),
+        .molecule => {
+            ui.labelDim("1 · the file");
+            toolMolecule(ui, m, cat);
+        },
+        .file => {
+            ui.labelDim("1 · the file");
+            toolFile(ui, m, cat);
+        },
+        // The hint above already said this field needs no file; there is no step 1.
+        .none => {},
     }
 
     ui.gap(8);
-    ui.separator();
-    ui.labelDim("name of the demo");
+    ui.labelDim(if (cat.tool == .none) "the name" else "2 · the name");
     _ = ui.textField("demo_name", &m.demo_name);
 
+    ui.gap(4);
     ui.beginRow();
     if (ui.buttonPrimary("create and open in the editor")) createDemo(m);
     if (ui.button("cancel")) ui.closeDialog();
     ui.endRow();
+
+    // Feedback lands HERE while the dialog is up. The root note is painted before
+    // this dialog's dim overlay — so "give the demo a name" and every failed write
+    // used to render UNDER the wizard, invisible exactly when they mattered.
+    if (m.note.items.len > 0) {
+        ui.gap(6);
+        ui.labelDim(m.note.items);
+    }
 
     // `createDemo` spawned the demo and has no `ui` of its own: it says so with a
     // flag, and the dialog closes itself here.
@@ -963,7 +1415,7 @@ fn openMine(m: *Menu, d: UserDemo, editor: bool) void {
 }
 
 /// Chemistry's specialized tool: the molecule need not be a file you already have.
-fn toolMolecule(ui: *widget.Ui, m: *Menu) void {
+fn toolMolecule(ui: *widget.Ui, m: *Menu, cat: Category) void {
     ui.labelDim("Fetch the molecule: by name from PubChem, or by code from the Protein Data Bank.");
 
     ui.labelDim("name (e.g. caffeine, aspirin, glucose)");
@@ -986,20 +1438,26 @@ fn toolMolecule(ui: *widget.Ui, m: *Menu) void {
     } else if (m.got) |g| {
         var buf: [160]u8 = undefined;
         ui.labelDim(std.fmt.bufPrint(&buf, "ready: {s}", .{g.name}) catch "");
+    } else if (m.job.elen > 0) {
+        // The download has a third state, and it is the one that needs saying:
+        // the error stays up until a new job replaces it, unlike the note.
+        var buf: [160]u8 = undefined;
+        ui.textLine(std.fmt.bufPrint(&buf, "download failed: {s}", .{m.job.err[0..m.job.elen]}) catch "download failed", 13, .regular, ui.theme.danger);
     }
 
     ui.gap(4);
-    ui.labelDim("or use a file of your own (PDB or XYZ):");
-    filePicker(ui, m);
+    ui.labelDim("or use a structure file of your own:");
+    filePicker(ui, m, cat);
 }
 
 fn toolFile(ui: *widget.Ui, m: *Menu, cat: Category) void {
-    var buf: [128]u8 = undefined;
-    ui.labelDim(std.fmt.bufPrint(&buf, "pick the file ({s})", .{cat.asset}) catch "pick the file");
-    filePicker(ui, m);
+    filePicker(ui, m, cat);
 }
 
-fn filePicker(ui: *widget.Ui, m: *Menu) void {
+fn filePicker(ui: *widget.Ui, m: *Menu, cat: Category) void {
+    // The picker lists what this field can READ, and nothing else. It is a no-op on
+    // every frame but the one where the field changed.
+    m.picker.setFilter(cat.exts);
     if (browse.pick(ui, &m.picker)) |path| {
         m.asset_path.clearRetainingCapacity();
         m.asset_path.appendSlice(m.gpa, path) catch {};
@@ -1031,7 +1489,20 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var env = try init.environ.createMap(gpa);
     defer env.deinit();
 
-    var m = Menu{ .gpa = gpa, .io = io, .env = &env, .picker = browse.Browser.init(gpa, io) };
+    // The picker opens on HOME, not on the process's cwd. The launcher is usually
+    // started from `zig-out/bin/` — where the only files are the demo binaries, which
+    // is how a person came to hand `astro` a 16 MB executable and call it a star
+    // catalog. Nobody's data is in the directory the program happens to live in.
+    var m = Menu{
+        .gpa = gpa,
+        .io = io,
+        .env = &env,
+        .picker = browse.Browser.init(gpa, io, env.get("HOME") orelse ""),
+    };
+    // The children's stderr, one file per launcher process, so two launchers do not
+    // read each other's errors.
+    m.err_log_len = if (std.fmt.bufPrint(&m.err_log, "/tmp/e8-launcher-{d}.err", .{std.os.linux.getpid()})) |p| p.len else |_| 0;
+    defer if (m.err_log_len > 0) std.Io.Dir.cwd().deleteFile(io, m.err_log[0..m.err_log_len]) catch {};
     defer {
         if (m.job.thread) |t| t.join();
         if (m.job.asset) |a| a.deinit(gpa);
@@ -1043,6 +1514,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             gpa.free(d.asset);
         }
         m.mine.deinit(gpa);
+        m.broken.deinit(gpa);
         m.demo_name.deinit(gpa);
         m.molecule.deinit(gpa);
         m.pdb_id.deinit(gpa);

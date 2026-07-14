@@ -212,6 +212,8 @@ pub fn kmeans(gpa: std.mem.Allocator, m: Matrix, k: usize, iters: usize, seed: u
 
     const counts = try gpa.alloc(u32, kk);
     defer gpa.free(counts);
+    const acc = try gpa.alloc(f32, kk * m.d);
+    defer gpa.free(acc);
     for (0..iters) |_| {
         var moved = false;
         for (0..n) |i| {
@@ -228,16 +230,18 @@ pub fn kmeans(gpa: std.mem.Allocator, m: Matrix, k: usize, iters: usize, seed: u
             out[i] = best;
         }
         @memset(counts, 0);
-        @memset(cent, 0);
+        @memset(acc, 0);
         for (0..n) |i| {
             const c = out[i];
             counts[c] += 1;
-            for (0..m.d) |j| cent[c * m.d + j] += m.row(i)[j];
+            for (0..m.d) |j| acc[c * m.d + j] += m.row(i)[j];
         }
         for (0..kk) |c| {
+            // An emptied cluster keeps its previous centroid — snapping it to
+            // the origin would drag every stray point there on the next pass.
             if (counts[c] == 0) continue;
             const inv = 1.0 / @as(f32, @floatFromInt(counts[c]));
-            for (0..m.d) |j| cent[c * m.d + j] *= inv;
+            for (0..m.d) |j| cent[c * m.d + j] = acc[c * m.d + j] * inv;
         }
         if (!moved) break;
     }

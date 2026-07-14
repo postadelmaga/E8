@@ -124,7 +124,7 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, max_rows: usiz
         if (l.len == 0) continue;
         if (l[0] == '#') continue; // comment lines: FITS-ish exports are full of them
         try lines.append(gpa, l);
-        if (lines.items.len > max_rows + 1) break;
+        if (lines.items.len >= max_rows + 1) break; // enough for a header + max_rows data
     }
     if (lines.items.len == 0) return error.EmptyTable;
 
@@ -140,21 +140,20 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, max_rows: usiz
         if (parseNum(f) == null and f.len > 0) header = true;
     }
     const first_data: usize = if (header) 1 else 0;
-    const rows = lines.items.len - first_data;
+    const rows = @min(lines.items.len - first_data, max_rows);
     if (rows == 0) return error.EmptyTable;
 
     // Names: the header's cells (they point into `text`), or synthesized ones in
-    // a buffer the table owns — a name must outlive this call either way.
+    // a buffer the table owns — a name must outlive this call either way. The
+    // fallbacks exist for every column: a header row may still leave cells empty.
     var synth: std.ArrayList(u8) = .empty;
     errdefer synth.deinit(gpa);
     var synth_at = try gpa.alloc([2]u32, n_cols); // (offset, len) into `synth`
     defer gpa.free(synth_at);
-    if (!header) {
-        for (0..n_cols) |c| {
-            const off: u32 = @intCast(synth.items.len);
-            try synth.print(gpa, "c{d}", .{c});
-            synth_at[c] = .{ off, @intCast(synth.items.len - off) };
-        }
+    for (0..n_cols) |c| {
+        const off: u32 = @intCast(synth.items.len);
+        try synth.print(gpa, "c{d}", .{c});
+        synth_at[c] = .{ off, @intCast(synth.items.len - off) };
     }
     const synth_buf = try synth.toOwnedSlice(gpa);
     errdefer gpa.free(synth_buf);

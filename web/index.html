@@ -6,7 +6,9 @@
 <title>E8 — an interactive paper</title>
 <meta name="description" content="The 240 roots of E8, one per elementary particle — Garrett Lisi's E8 theory, steered live in the browser." />
 <style>
-  html, body { margin: 0; height: 100%; background: #05060a; overflow: hidden; }
+  /* Black, because the wasm clears its frame to black: any other page colour would
+     show as a seam around the canvas for the instant before the first frame lands. */
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; touch-action: none; outline: none; }
   #err { position: fixed; inset: 0; display: none; place-content: center; color: #f78; font: 14px monospace; padding: 2rem; white-space: pre-wrap; }
   /* The way in, for someone who arrived from a link and has never seen this: it

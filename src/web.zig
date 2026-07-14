@@ -266,7 +266,17 @@ export fn zicroBoot() void {
         .app_id = D.app_id,
         .width = 1200,
         .height = 760,
-        .titlebar = true,
+        // NO titlebar in a tab. The browser window IS the window — a glass frame
+        // here would be a window drawn inside a window, complete with a border,
+        // a shadow and rounded corners eating the figure's edges. Asking for no
+        // titlebar makes zrame's web backend collapse the chrome to an opaque,
+        // full-canvas fill of `style.glass`.
+        .titlebar = false,
+        // And that fill is EXACTLY the black the rasterizer clears the scene to. Any
+        // other colour, however dark, redraws the frame it was meant to remove: the
+        // figure's buffer becomes a card of one black laid on a desk of another, and
+        // the seam between them is a border again — just a quieter one.
+        .style = .{ .glass = zrame.Color.rgba(0, 0, 0, 1.0) },
         .close_on_esc = false,
         .on_key = onKey,
         .on_scroll = onScroll,

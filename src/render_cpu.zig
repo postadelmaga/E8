@@ -12,6 +12,7 @@
 //! variable between jobs — spawning threads per frame cost more than the raster.
 
 const std = @import("std");
+const platform = @import("platform.zig");
 
 pub const Edge = struct {
     x0: f32,
@@ -77,8 +78,10 @@ pub const Cpu = struct {
     }
 
     /// Spawn `n` parked band workers (the caller keeps one band for itself, so
-    /// pass cores − 1). Without a pool every draw call runs serial.
+    /// pass cores − 1). Without a pool every draw call runs serial — which is
+    /// what a browser tab gets, and at 240 points it never notices.
     pub fn startPool(self: *Cpu, io: std.Io, n: usize) !void {
+        if (platform.web) return;
         if (n == 0 or self.threads.len > 0) return;
         self.io = io;
         self.threads = try self.gpa.alloc(std.Thread, n);

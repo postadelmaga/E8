@@ -3,7 +3,9 @@
 //! the same file is re-read from disk on F5 for hot reload while authoring.
 
 const std = @import("std");
+const log = @import("log.zig");
 const hud_mod = @import("hud.zig");
+const platform = @import("platform.zig");
 
 pub const Slide = struct {
     title: []const u8,
@@ -66,27 +68,36 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, embedded: [:0]
 }
 
 pub fn loadEx(gpa: std.mem.Allocator, io: std.Io, path: []const u8, embedded: [:0]const u8) Loaded {
-    if (std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1 << 20))) |bytes| {
-        defer gpa.free(bytes);
-        const z = gpa.dupeZ(u8, bytes) catch return .{ .deck = parseOrEmpty(gpa, embedded) };
-        defer gpa.free(z);
-        if (parse(gpa, z)) |d| {
-            std.debug.print("deck: loaded {s} ({d} slides)\n", .{ path, d.slides.len });
-            warnLongBodies(path, d);
-            return .{ .deck = d };
-        } else |e| {
-            std.debug.print("deck: {s} unparsable ({s}) — using embedded\n", .{ path, @errorName(e) });
-            return .{ .deck = parseOrEmpty(gpa, embedded), .parse_err = e };
-        }
-    } else |_| {}
-    return .{ .deck = parseOrEmpty(gpa, embedded) };
+    // A browser tab has no working directory: the deck it plays is the one
+    // compiled into it, which is also the one the author shipped. The `else` is
+    // not decoration — a comptime-known condition means the branch not taken is
+    // never ANALYZED, and that is what keeps std.Io.Dir (and posix under it) out
+    // of a wasm build entirely.
+    if (comptime platform.web) {
+        return .{ .deck = parseOrEmpty(gpa, embedded) };
+    } else {
+        if (std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1 << 20))) |bytes| {
+            defer gpa.free(bytes);
+            const z = gpa.dupeZ(u8, bytes) catch return .{ .deck = parseOrEmpty(gpa, embedded) };
+            defer gpa.free(z);
+            if (parse(gpa, z)) |d| {
+                log.print("deck: loaded {s} ({d} slides)\n", .{ path, d.slides.len });
+                warnLongBodies(path, d);
+                return .{ .deck = d };
+            } else |e| {
+                log.print("deck: {s} unparsable ({s}) — using embedded\n", .{ path, @errorName(e) });
+                return .{ .deck = parseOrEmpty(gpa, embedded), .parse_err = e };
+            }
+        } else |_| {}
+        return .{ .deck = parseOrEmpty(gpa, embedded) };
+    }
 }
 
 /// The panel cuts a body at `hud.panel_body_max` (with a visible mark) — tell
 /// the author at load time, when it can still be fixed before the talk.
 fn warnLongBodies(path: []const u8, d: Deck) void {
     for (d.slides, 0..) |s, i| {
-        if (s.body.len > hud_mod.panel_body_max) std.debug.print(
+        if (s.body.len > hud_mod.panel_body_max) log.print(
             "deck: {s} slide {d} (\"{s}\") body is {d} bytes — the panel shows the first {d}\n",
             .{ path, i + 1, s.title, s.body.len, hud_mod.panel_body_max },
         );
@@ -95,7 +106,7 @@ fn warnLongBodies(path: []const u8, d: Deck) void {
 
 fn parseOrEmpty(gpa: std.mem.Allocator, embedded: [:0]const u8) Deck {
     return parse(gpa, embedded) catch |e| blk: {
-        std.debug.print("deck: embedded deck unparsable ({s})\n", .{@errorName(e)});
+        log.print("deck: embedded deck unparsable ({s})\n", .{@errorName(e)});
         break :blk .{};
     };
 }

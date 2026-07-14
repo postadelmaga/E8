@@ -183,6 +183,66 @@ pub fn build(b: *std.Build) void {
         run_one.dependOn(&rc.step);
     }
 
+    // `zig build web -Ddemo=lisi` — the interactive paper in a browser tab.
+    //
+    // wasm32-freestanding: no libc, no Wayland, and NO ZENGINE — the engine is
+    // Vulkan, and a tab has none. It costs nothing to leave out, because the
+    // figure was always drawn by `render_cpu.zig`, which is pure Zig arithmetic;
+    // the GPU path is an accelerator, not the renderer. Everything else in the
+    // frame — the projection, the plugins, the deck, the HUD — is the very same
+    // code the native build runs (see src/web.zig, src/platform.zig).
+    {
+        const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+        const zicro_dep_web = b.dependency("zicro", .{ .target = wasm_target, .optimize = .ReleaseSmall });
+        const zicro_web = b.createModule(.{
+            .root_source_file = zicro_dep_web.builder.path("src/web_root.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+        });
+        zicro_web.addIncludePath(zicro_dep_web.builder.path("vendor/stb"));
+        zicro_web.addCSourceFile(.{
+            .file = zicro_dep_web.builder.path("vendor/stb/stb_truetype_web.c"),
+            .flags = &.{ "-O2", "-fno-sanitize=undefined" },
+        });
+        const zrame_web = b.createModule(.{
+            .root_source_file = zrame_dep.builder.path("src/web_root.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{.{ .name = "zicro", .module = zicro_web }},
+        });
+
+        const web_demo = b.option([]const u8, "web-demo", "Which demo the web build carries (a domain that GENERATES its points: lisi, mtheory, polytope, molecule)") orelse demo;
+        const web_opt = b.addOptions();
+        web_opt.addOption([]const u8, "demo", web_demo);
+
+        // The engine, in name only: `still.zig` calls its image decoder, and the
+        // tab has no Vulkan to link one out of (src/zengine_web.zig).
+        const zengine_stub = b.createModule(.{
+            .root_source_file = b.path("src/zengine_web.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+        });
+
+        const web_mod = b.createModule(.{
+            .root_source_file = b.path("src/web.zig"),
+            .target = wasm_target,
+            .optimize = .ReleaseSmall,
+            .imports = &.{
+                .{ .name = "zrame", .module = zrame_web },
+                .{ .name = "zengine", .module = zengine_stub },
+                .{ .name = "build_options", .module = web_opt.createModule() },
+            },
+        });
+        const web_exe = b.addExecutable(.{ .name = "e8", .root_module = web_mod });
+        web_exe.entry = .disabled;
+        web_exe.rdynamic = true;
+        const install_wasm = b.addInstallArtifact(web_exe, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
+        const copy_html = b.addInstallFileWithDir(b.path("web/index.html"), .{ .custom = "web" }, "index.html");
+        const web_step = b.step("web", "Build the interactive paper for the browser into zig-out/web");
+        web_step.dependOn(&install_wasm.step);
+        web_step.dependOn(&copy_html.step);
+    }
+
     // Tests: the root-system math is exact Lie theory — every invariant is checked.
     // E8 (Lisi's 240 roots) and E10 (the M-theory demo: the Lorentzian lattice,
     // the Dynkin diagram recovered from the simple roots, the BKL billiard).

@@ -34,6 +34,9 @@ const panel = @import("panel.zig");
 
 pub const id = "editor";
 
+/// Needs a second window, a thread and a file to save into — none of which a browser tab has (see platform.zig).
+pub const native_only = true;
+
 // --- what the two threads say to each other -----------------------------------------------
 
 /// The whole cross-thread surface: a ZON string one way, the live camera the other.

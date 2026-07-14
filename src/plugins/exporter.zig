@@ -9,6 +9,9 @@ const D = app_mod.D;
 
 pub const id = "exporter";
 
+/// Needs a file to write the CSV into — none of which a browser tab has (see platform.zig).
+pub const native_only = true;
+
 pub fn key(a: *App, code: u32) bool {
     if (code != keys.export_csv) return false; // X
     D.exportCsv(a) catch |e| {

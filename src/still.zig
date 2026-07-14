@@ -14,6 +14,10 @@
 //! Vulkan at all.
 
 const std = @import("std");
+const platform = @import("platform.zig");
+/// The decoder is zengine's. The WEB build is handed a stub module under the same
+/// name (see build.zig): a browser has a decoder of its own, and dragging Vulkan
+/// into a tab to reach stb_image would be an odd way to open a PNG.
 const ze = @import("zengine");
 
 pub const Still = struct {
@@ -35,18 +39,24 @@ pub const max_bytes: usize = 64 << 20;
 
 /// Decode `path` (relative to the working directory, like the deck itself).
 pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !Still {
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_bytes));
-    defer gpa.free(bytes);
-    var img = try ze.image.decode(gpa, bytes);
-    errdefer img.deinit();
-    const owned_path = try gpa.dupe(u8, path);
-    return .{
-        .gpa = gpa,
-        .path = owned_path,
-        .w = img.width,
-        .h = img.height,
-        .rgba = img.rgba, // ownership moves to the Still
-    };
+    // The `else` keeps the filesystem out of the wasm build's ANALYSIS, not just
+    // out of its execution (see deck.zig).
+    if (comptime platform.web) {
+        return error.NoPicturesInATabYet;
+    } else {
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_bytes));
+        defer gpa.free(bytes);
+        var img = try ze.image.decode(gpa, bytes);
+        errdefer img.deinit();
+        const owned_path = try gpa.dupe(u8, path);
+        return .{
+            .gpa = gpa,
+            .path = owned_path,
+            .w = img.width,
+            .h = img.height,
+            .rgba = img.rgba, // ownership moves to the Still
+        };
+    }
 }
 
 /// Compose the picture into an RGBA framebuffer of `dst_w` × `dst_h`: fitted

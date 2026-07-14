@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>E8 — an interactive paper</title>
+<meta name="description" content="The 240 roots of E8, one per elementary particle — Garrett Lisi's E8 theory, steered live in the browser." />
+<style>
+  html, body { margin: 0; height: 100%; background: #05060a; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; outline: none; }
+  #err { position: fixed; inset: 0; display: none; place-content: center; color: #f78; font: 14px monospace; padding: 2rem; white-space: pre-wrap; }
+  /* The way in, for someone who arrived from a link and has never seen this: it
+     fades out on the first interaction, because after that the guide strip the
+     app draws itself says everything this did. */
+  #hint {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    color: #c6d0e0; background: rgba(10,12,20,.62); border: 1px solid rgba(120,140,180,.28);
+    border-radius: 16px; padding: 9px 18px; font: 14px/1.4 system-ui, sans-serif;
+    pointer-events: none; transition: opacity .6s ease; z-index: 2;
+  }
+  #hint b { color: #f0e2aa; font-weight: 600; }
+  /* The source, where a reader who wants it will look for it: quiet, in the
+     corner, and it stays — unlike the hint, this is not in the way of anything. */
+  #src {
+    position: fixed; right: 16px; top: 14px; z-index: 2;
+    font: 13px/1.5 system-ui, sans-serif; color: #8792a6;
+    display: flex; gap: 14px; align-items: center;
+  }
+  #src a { color: #9fb4d8; text-decoration: none; border-bottom: 1px solid rgba(159,180,216,.28); }
+  #src a:hover { color: #dbe6f7; border-bottom-color: #dbe6f7; }
+  #src svg { vertical-align: -2px; margin-right: 5px; opacity: .75; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<div id="src">
+  <span>
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg><a href="https://github.com/postadelmaga/E8" target="_blank" rel="noopener">E8</a>
+  </span>
+  <a href="https://github.com/postadelmaga/Zengine" target="_blank" rel="noopener">Zengine</a>
+  <a href="https://github.com/postadelmaga/Zrame" target="_blank" rel="noopener">Zrame</a>
+</div>
+<div id="hint">Press <b>P</b> to start the paper · <b>H</b> for every key · drag to orbit, click a root</div>
+<div id="err"></div>
+<script type="module">
+// The interactive paper, in a tab. The wasm module IS the app — the same domain,
+// plugins and software rasterizer the native build runs (src/web.zig). This
+// harness only instantiates it, calls zicroBoot() once, drives rAF, blits the
+// RGBA buffer, and forwards DOM events into the exported ABI.
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d", { alpha: false });
+const errEl = document.getElementById("err");
+const hint = document.getElementById("hint");
+const fail = (m) => { errEl.style.display = "grid"; errEl.textContent = "E8 web error:\n" + m; };
+
+let x, mem;
+try {
+  const { instance } = await WebAssembly.instantiateStreaming(fetch("e8.wasm"), { env: {} });
+  x = instance.exports; mem = x.memory;
+  x.zicroBoot();
+} catch (e) { fail(String(e)); throw e; }
+
+// HiDPI: render into a physical-pixel buffer and hand the ratio to the wasm side.
+let dpr = 1;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  const cssW = Math.max(1, window.innerWidth | 0), cssH = Math.max(1, window.innerHeight | 0);
+  x.zicroResize(Math.round(cssW * dpr), Math.round(cssH * dpr), dpr);
+  canvas.width = x.zicroWidth();
+  canvas.height = x.zicroHeight();
+}
+window.addEventListener("resize", resize);
+resize();
+canvas.focus();
+
+let touched = false;
+const used = () => { if (!touched) { touched = true; hint.style.opacity = "0"; } };
+
+// --- pointer (CSS px → physical px) ---
+const pos = (e) => { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * dpr, (e.clientY - r.top) * dpr]; };
+canvas.addEventListener("pointermove", (e) => { const [px, py] = pos(e); x.zicroPointerMove(px, py); });
+canvas.addEventListener("pointerdown", (e) => { used(); canvas.setPointerCapture(e.pointerId); canvas.focus(); const [px, py] = pos(e); x.zicroPointerMove(px, py); x.zicroPointerButton(272, 1); });
+canvas.addEventListener("pointerup",   (e) => { const [px, py] = pos(e); x.zicroPointerMove(px, py); x.zicroPointerButton(272, 0); });
+canvas.addEventListener("wheel", (e) => { e.preventDefault(); used(); x.zicroScroll(-e.deltaY * dpr); }, { passive: false });
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// --- keyboard: physical key (event.code) → evdev code, the same table the
+// native build binds (src/keys.zig). ---
+const EVDEV = {
+  KeyA:30,KeyB:48,KeyC:46,KeyD:32,KeyE:18,KeyF:33,KeyG:34,KeyH:35,KeyI:23,KeyJ:36,KeyK:37,KeyL:38,KeyM:50,
+  KeyN:49,KeyO:24,KeyP:25,KeyQ:16,KeyR:19,KeyS:31,KeyT:20,KeyU:22,KeyV:47,KeyW:17,KeyX:45,KeyY:21,KeyZ:44,
+  Digit1:2,Digit2:3,Digit3:4,Digit4:5,Digit5:6,Digit6:7,Digit7:8,Digit8:9,Digit9:10,Digit0:11,
+  Space:57,Minus:12,Equal:13,Comma:51,Period:52,Slash:53,Semicolon:39,Quote:40,
+  BracketLeft:26,BracketRight:27,Backslash:43,Backquote:41,
+  Backspace:14,Tab:15,Enter:28,Escape:1,Delete:111,Home:102,End:107,
+  ArrowLeft:105,ArrowRight:106,ArrowUp:103,ArrowDown:108,
+  ShiftLeft:42,ShiftRight:54,
+};
+canvas.addEventListener("keydown", (e) => {
+  const code = EVDEV[e.code];
+  if (code === undefined) return;
+  if (e.code !== "F5" && e.code !== "F12") e.preventDefault();
+  used();
+  x.zicroKey(code, 1);
+});
+canvas.addEventListener("keyup", (e) => {
+  const code = EVDEV[e.code];
+  if (code !== undefined) x.zicroKey(code, 0);
+});
+
+function frame(tMs) {
+  x.zicroFrame(tMs);
+  const w = x.zicroWidth(), h = x.zicroHeight();
+  if (w > 0 && h > 0) {
+    const bytes = new Uint8ClampedArray(mem.buffer, x.zicroPixels(), w * h * 4);
+    ctx.putImageData(new ImageData(bytes, w, h), 0, 0);
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

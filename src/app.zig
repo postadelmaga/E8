@@ -21,12 +21,13 @@
 //! cross-thread traffic stays here (camera atomics, key queue).
 
 const std = @import("std");
+const log = @import("log.zig");
 const zrame = @import("zrame");
 const geom = @import("geom.zig");
 const hud_mod = @import("hud.zig");
 const domain = @import("domain.zig");
 const descriptor = @import("descriptor.zig");
-const render_gpu = @import("render_gpu.zig");
+const platform = @import("platform.zig");
 const still_mod = @import("still.zig");
 
 /// The active domain package (see src/domain.zig).
@@ -81,7 +82,22 @@ pub fn unloadPoints(gpa: std.mem.Allocator, points: []D.Point) void {
     gpa.free(points);
 }
 
-pub const plugin_list = D.plugins;
+/// The domain names the plugins it wants; the TARGET decides which of them can
+/// exist. A plugin that opens a second window, spawns a thread or writes a file
+/// (the editor, the CSV export) marks itself `native_only` and is not in the
+/// registry of a web build — the domain does not have to know there is one.
+pub const plugin_list = blk: {
+    if (!platform.web) break :blk D.plugins;
+    var kept: []const type = &.{};
+    for (D.plugins) |P| {
+        if (@hasDecl(P, "native_only") and P.native_only) continue;
+        kept = kept ++ [_]type{P};
+    }
+    var out: [kept.len]type = undefined;
+    for (kept, 0..) |P, i| out[i] = P;
+    const frozen = out;
+    break :blk frozen;
+};
 
 /// One field per plugin, named by its `id`, typed by its `State` (or void).
 pub const PluginStates = blk: {
@@ -240,10 +256,12 @@ pub const App = struct {
     io: std.Io,
     win: *zrame.Window,
     hud: *hud_mod.Hud,
-    /// The zengine device, when one could be created. The main view uses it
-    /// only with `--gpu`; plugins (the inspector's mini-scene) can always ask
-    /// it for an extra `View`. Null when Vulkan/dmabuf is unavailable.
-    gpu: ?*render_gpu.Gpu3d = null,
+    /// The zengine device, when one could be created (`*render_gpu.Gpu3d`, opaque
+    /// here). Only main.zig — which owns the renderers — knows what it is: the
+    /// seam is deliberately untyped so that `app.zig`, and every plugin through
+    /// it, does not import zengine. That is what lets the web build exist at all:
+    /// a browser tab has no Vulkan, and now nothing in the framework asks for it.
+    gpu: ?*anyopaque = null,
 
     // The point system (immutable after startup). Sized at RUNTIME: a generated
     // domain knows its count at comptime, a loaded one (a file the user opened)
@@ -420,7 +438,7 @@ pub const App = struct {
 
         install(a, file) catch |e| {
             install(a, prev) catch |e2| {
-                std.debug.print(
+                log.print(
                     "the deck asked for \"{s}\" ({s}), and \"{s}\" will not load back ({s}) — nothing left to show\n",
                     .{ file, @errorName(e), prev, @errorName(e2) },
                 );

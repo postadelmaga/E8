@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const table = @import("../data/table.zig");
+const log = @import("../../log.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -130,7 +131,7 @@ fn findCol(t: *const table.Table, names: []const []const u8, want_numeric: bool)
 pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     const path = app_mod.cli.file;
     if (path.len == 0) {
-        std.debug.print(
+        log.print(
             \\the star-catalog domain needs a catalog:
             \\  zig build -Ddemo=astro run -- gaia.csv
             \\  columns it looks for: ra, dec, parallax (mas) or dist (pc),
@@ -227,7 +228,7 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     try nearestAll(gpa, out, nn);
 
     buildMenus();
-    std.debug.print("catalog: {s} — {d} stars (of {d} rows) · out to {d:.1} pc · color: {s} · magnitudes: {s}\n", .{
+    log.print("catalog: {s} — {d} stars (of {d} rows) · out to {d:.1} pc · color: {s} · magnitudes: {s}\n", .{
         path,
         out.len,
         rows,
@@ -641,7 +642,7 @@ pub fn exportCsv(a: *App) !void {
         try out.appendSlice(a.gpa, line);
     }
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "catalog_stars.csv", .data = out.items });
-    std.debug.print("exported catalog_stars.csv ({d} stars, cartesian parsecs)\n", .{a.count()});
+    log.print("exported catalog_stars.csv ({d} stars, cartesian parsecs)\n", .{a.count()});
 }
 
 pub const deck_path = "deck.zon";

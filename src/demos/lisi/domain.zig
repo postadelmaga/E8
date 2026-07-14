@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const e8 = @import("e8.zig");
+const log = @import("../../log.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -395,5 +396,5 @@ pub fn exportCsv(a: *App) !void {
     const csv = try e8.buildCsv(a.gpa, a.points, &a.basis);
     defer a.gpa.free(csv);
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "e8_roots.csv", .data = csv });
-    std.debug.print("exported e8_roots.csv ({d} roots, current projection)\n", .{a.count()});
+    log.print("exported e8_roots.csv ({d} roots, current projection)\n", .{a.count()});
 }

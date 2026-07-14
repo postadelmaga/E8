@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const table = @import("table.zig");
+const log = @import("../../log.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -187,7 +188,7 @@ fn pickLabel(t: *const table.Table, spec: []const u8) void {
 pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     const path = app_mod.cli.file;
     if (path.len == 0) {
-        std.debug.print(
+        log.print(
             \\the dataset domain needs a file:
             \\  zig build -Ddemo=data run -- table.csv [--coords=a,b,c] [--class=col] [--label=col] [--knn=6]
             \\
@@ -266,7 +267,7 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     try buildTables(gpa, pts);
     buildMenus();
 
-    std.debug.print("dataset: {s} — {d} rows · {d} coordinate columns (first: {s}) · classes: {s} ({d}) · labels: {s}\n", .{
+    log.print("dataset: {s} — {d} rows · {d} coordinate columns (first: {s}) · classes: {s} ({d}) · labels: {s}\n", .{
         path,
         rows,
         n_coords,
@@ -732,7 +733,7 @@ pub fn exportCsv(a: *App) !void {
         try out.appendSlice(a.gpa, line);
     }
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "dataset_view.csv", .data = out.items });
-    std.debug.print("exported dataset_view.csv ({d} rows + the current projection)\n", .{a.count()});
+    log.print("exported dataset_view.csv ({d} rows + the current projection)\n", .{a.count()});
 }
 
 pub const deck_path = "deck.zon";

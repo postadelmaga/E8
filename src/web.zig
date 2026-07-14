@@ -99,6 +99,27 @@ fn onKey(_: *zrame.Window, key: u32, state: u32, _: ?*anyopaque) void {
     _ = keys.escape; // Esc has nothing to close in a tab: the window is the page
 }
 
+/// A finger, tapped on the figure — and the only ambiguous gesture there is.
+///
+/// A tap on a ROOT means "tell me about this one". A tap on the empty space around
+/// it means "go on" — it is how anyone reads a deck on a phone, and without it the
+/// journey is unreachable there, because the keyboard that drives it (P) does not
+/// exist. The two cannot be told apart in JavaScript: the browser knows where the
+/// finger landed, not what is under it. The app does — after `dispatchFrame` has
+/// consumed the pick, `selected` is either a root or −1.
+///
+/// So the tap is RECORDED here and RESOLVED in `draw`: pick first, then, only if
+/// nothing was hit, advance. The first tap on a page nobody has touched yet opens
+/// the paper (that is what P does when the panel is closed), which is exactly the
+/// way in a phone user needs and the hint bar promises.
+var g_tap_pending = false;
+
+export fn zicroTap(x: f32, y: f32) void {
+    if (!g_booted) return;
+    g_pick = .{ x, y };
+    g_tap_pending = true;
+}
+
 fn dot3(a: [3]f32, b: [3]f32) f32 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
@@ -128,6 +149,16 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
     g_pick = null;
 
     app_mod.dispatchFrame(&g_app);
+
+    // The tap, resolved: the pick has been consumed, so `selected` now answers the
+    // question JavaScript could not. A root under the finger → it is inspected and
+    // that is all. Nothing under it → the finger meant "next", and P is the very key
+    // the deck already listens to (opening the panel if this is the first one).
+    if (g_tap_pending) {
+        g_tap_pending = false;
+        if (g_app.selected < 0) _ = app_mod.dispatchKey(&g_app, keys.present);
+    }
+
     if (g_app.reset_camera) {
         g_app.reset_camera = false;
         app_mod.storeF32(&app_mod.cam_yaw, 0.65);

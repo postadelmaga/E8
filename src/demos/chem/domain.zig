@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const read = @import("read.zig");
+const log = @import("../../log.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -79,7 +80,7 @@ var n_residues: usize = 0;
 pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     const path = app_mod.cli.file;
     if (path.len == 0) {
-        std.debug.print(
+        log.print(
             \\the structure domain needs a file:
             \\  zig build -Ddemo=chem run -- 1ubq.pdb
             \\  zig build -Ddemo=chem run -- caffeine.xyz
@@ -181,7 +182,7 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
 
     computeInertiaAxes(pts);
     buildMenus();
-    std.debug.print("structure: {s} — {d} atoms · {d} bonds · {d} chains · {d} residues · {s}\n", .{
+    log.print("structure: {s} — {d} atoms · {d} bonds · {d} chains · {d} residues · {s}\n", .{
         path, atoms.len, bonds.len, n_chains, n_residues, if (st.is_pdb) "PDB" else "XYZ",
     });
     return pts;
@@ -676,7 +677,7 @@ pub fn exportCsv(a: *App) !void {
         try out.appendSlice(a.gpa, line);
     }
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "structure_atoms.csv", .data = out.items });
-    std.debug.print("exported structure_atoms.csv ({d} atoms)\n", .{atoms.len});
+    log.print("exported structure_atoms.csv ({d} atoms)\n", .{atoms.len});
 }
 
 pub const deck_path = "deck.zon";

@@ -211,10 +211,6 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "zicro", .module = zicro_web }},
         });
 
-        const web_demo = b.option([]const u8, "web-demo", "Which demo the web build carries (a domain that GENERATES its points: lisi, mtheory, polytope, molecule)") orelse demo;
-        const web_opt = b.addOptions();
-        web_opt.addOption([]const u8, "demo", web_demo);
-
         // The engine, in name only: `still.zig` calls its image decoder, and the
         // tab has no Vulkan to link one out of (src/zengine_web.zig).
         const zengine_stub = b.createModule(.{
@@ -223,24 +219,47 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSmall,
         });
 
-        const web_mod = b.createModule(.{
-            .root_source_file = b.path("src/web.zig"),
-            .target = wasm_target,
-            .optimize = .ReleaseSmall,
-            .imports = &.{
-                .{ .name = "zrame", .module = zrame_web },
-                .{ .name = "zengine", .module = zengine_stub },
-                .{ .name = "build_options", .module = web_opt.createModule() },
-            },
-        });
-        const web_exe = b.addExecutable(.{ .name = "e8", .root_module = web_mod });
-        web_exe.entry = .disabled;
-        web_exe.rdynamic = true;
-        const install_wasm = b.addInstallArtifact(web_exe, .{ .dest_dir = .{ .override = .{ .custom = "web" } } });
-        const copy_html = b.addInstallFileWithDir(b.path("web/index.html"), .{ .custom = "web" }, "index.html");
-        const web_step = b.step("web", "Build the interactive paper for the browser into zig-out/web");
-        web_step.dependOn(&install_wasm.step);
-        web_step.dependOn(&copy_html.step);
+        const web_step = b.step("web", "Build every demo for the browser into zig-out/web");
+
+        // ONE WASM PER DEMO — the same reason there is one executable per demo, and
+        // the same answer. The domain is a comptime seam, so a module cannot switch
+        // demo at runtime; natively the launcher spawns the right process, and a tab
+        // cannot spawn anything. So it FETCHES the right module instead: the gallery
+        // (web/index.html) lists them, and `demo.html?d=<name>` instantiates exactly
+        // one — which is also what a browser wants, since nobody downloads nine
+        // demos to look at one.
+        // The FOUR that generate their own points. The other five demos are profiles:
+        // they exist to open a file you bring (a PDB, a catalog, a CSV), and a tab has
+        // no file to give them — so they are not in the gallery until it can (upload,
+        // or a bundled sample).
+        const web_demos = [_][]const u8{ "lisi", "mtheory", "polytope", "molecule" };
+        for (web_demos) |name| {
+            const web_opt = b.addOptions();
+            web_opt.addOption([]const u8, "demo", name);
+
+            const web_mod = b.createModule(.{
+                .root_source_file = b.path("src/web.zig"),
+                .target = wasm_target,
+                .optimize = .ReleaseSmall,
+                .imports = &.{
+                    .{ .name = "zrame", .module = zrame_web },
+                    .{ .name = "zengine", .module = zengine_stub },
+                    .{ .name = "build_options", .module = web_opt.createModule() },
+                },
+            });
+            const web_exe = b.addExecutable(.{ .name = b.fmt("e8-{s}", .{name}), .root_module = web_mod });
+            web_exe.entry = .disabled;
+            web_exe.rdynamic = true;
+            const install_wasm = b.addInstallArtifact(web_exe, .{
+                .dest_dir = .{ .override = .{ .custom = "web/wasm" } },
+            });
+            web_step.dependOn(&install_wasm.step);
+        }
+
+        inline for (.{ "index.html", "demo.html" }) |page| {
+            const copy = b.addInstallFileWithDir(b.path("web/" ++ page), .{ .custom = "web" }, page);
+            web_step.dependOn(&copy.step);
+        }
     }
 
     // Tests: the root-system math is exact Lie theory — every invariant is checked.

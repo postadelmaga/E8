@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const read = @import("read.zig");
+const log = @import("../../log.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -107,7 +108,7 @@ fn neighbors(i: usize) []const u16 {
 pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     const path = app_mod.cli.file;
     if (path.len == 0) {
-        std.debug.print(
+        log.print(
             \\the network domain needs a graph:
             \\  zig build -Ddemo=graph run -- karate.graphml
             \\  zig build -Ddemo=graph run -- edges.txt      (one "a b" per line)
@@ -170,7 +171,7 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     }
 
     buildMenus();
-    std.debug.print("network: {s} — {d} nodes · {d} edges · {d} communities · {d} components · max degree {d}\n", .{
+    log.print("network: {s} — {d} nodes · {d} edges · {d} communities · {d} components · max degree {d}\n", .{
         path, n, g.edges.len, n_comm, n_comp, max_degree,
     });
     return pts;
@@ -642,7 +643,7 @@ pub fn exportCsv(a: *App) !void {
         try out.appendSlice(a.gpa, line);
     }
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "network_nodes.csv", .data = out.items });
-    std.debug.print("exported network_nodes.csv ({d} nodes)\n", .{a.count()});
+    log.print("exported network_nodes.csv ({d} nodes)\n", .{a.count()});
 }
 
 pub const deck_path = "deck.zon";

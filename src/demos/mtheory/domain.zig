@@ -32,6 +32,7 @@
 const std = @import("std");
 const e8 = @import("../lisi/e8.zig");
 const e10 = @import("e10.zig");
+const log = @import("../../log.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -685,5 +686,5 @@ pub fn exportCsv(a: *App) !void {
     const csv = try out.toOwnedSlice(a.gpa);
     defer a.gpa.free(csv);
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "e10.csv", .data = csv });
-    std.debug.print("exported e10.csv ({d} roots)\n", .{a.points.len});
+    log.print("exported e10.csv ({d} roots)\n", .{a.points.len});
 }

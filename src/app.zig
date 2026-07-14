@@ -420,6 +420,12 @@ pub const App = struct {
     /// was on screen a moment ago.
     pub fn reloadPoints(a: *App, file: []const u8) !void {
         if (comptime !@hasDecl(D, "load")) return error.DomainGeneratesItsPoints;
+        // A slide that swaps the data swaps a FILE, and a tab has none — the deck a
+        // browser plays is the embedded one, whose points came with it. The guard is
+        // comptime so the branch is not merely skipped but never ANALYZED: below is
+        // `std.fs.max_path_bytes`, and wasm32-freestanding has no PATH_MAX to give it
+        // (the error names std/Io/Dir.zig and no file anyone wrote — see deck.zig).
+        if (comptime platform.web) return error.NoDataFilesInATab;
         if (std.mem.eql(u8, a.sourceName(), file)) return; // already showing it
 
         var prev_buf: [std.fs.max_path_bytes]u8 = undefined;

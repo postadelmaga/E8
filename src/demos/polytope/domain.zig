@@ -6,6 +6,7 @@
 //! and small functions; the framework does the rest.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -338,5 +339,5 @@ pub fn exportCsv(a: *App) !void {
     const csv = try out.toOwnedSlice(a.gpa);
     defer a.gpa.free(csv);
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "polytope.csv", .data = csv });
-    std.debug.print("exported polytope.csv\n", .{});
+    log.print("exported polytope.csv\n", .{});
 }

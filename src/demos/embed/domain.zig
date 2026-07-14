@@ -26,6 +26,7 @@ const std = @import("std");
 const npy = @import("npy.zig");
 const reduce = @import("reduce.zig");
 const table = @import("../data/table.zig");
+const log = @import("../../log.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -179,7 +180,7 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     gpa_ref = gpa;
     const path = app_mod.cli.file;
     if (path.len == 0) {
-        std.debug.print(
+        log.print(
             \\the embeddings domain needs vectors:
             \\  zig build -Ddemo=embed run -- vectors.npy [--label=names.txt] [--knn=8]
             \\  zig build -Ddemo=embed run -- vectors.csv [--class=col] [--label=col]
@@ -263,7 +264,7 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
         }
         have_tsne = true;
     } else {
-        std.debug.print("t-SNE skipped: {d} rows over the {d} the exact solver takes — PCA views only\n", .{ n_rows, reduce.max_tsne });
+        log.print("t-SNE skipped: {d} rows over the {d} the exact solver takes — PCA views only\n", .{ n_rows, reduce.max_tsne });
     }
 
     // Clusters (k-means in the original space). The cosine neighbor table falls
@@ -276,7 +277,7 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     }
 
     buildMenus();
-    std.debug.print("embeddings: {s} — {d} vectors in R^{d} · {d} PCs kept · t-SNE: {s} · classes: {d} · clusters: {d}\n", .{
+    log.print("embeddings: {s} — {d} vectors in R^{d} · {d} PCs kept · t-SNE: {s} · classes: {d} · clusters: {d}\n", .{
         path, n_rows, n_dims, n_pcs, if (have_tsne) "yes" else "no", n_classes, n_clusters,
     });
     return pts;
@@ -731,7 +732,7 @@ pub fn exportCsv(a: *App) !void {
         try out.appendSlice(a.gpa, line);
     }
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "embedding_view.csv", .data = out.items });
-    std.debug.print("exported embedding_view.csv ({d} vectors)\n", .{a.count()});
+    log.print("exported embedding_view.csv ({d} vectors)\n", .{a.count()});
 }
 
 pub const deck_path = "deck.zon";

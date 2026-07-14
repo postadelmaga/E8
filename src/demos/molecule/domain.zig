@@ -7,6 +7,7 @@
 //! Coordinates are the PubChem CID 2519 3D conformer (Å), recentered.
 
 const std = @import("std");
+const log = @import("../../log.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -307,5 +308,5 @@ pub fn exportCsv(a: *App) !void {
     const csv = try out.toOwnedSlice(a.gpa);
     defer a.gpa.free(csv);
     try std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = "caffeine.csv", .data = csv });
-    std.debug.print("exported caffeine.csv\n", .{});
+    log.print("exported caffeine.csv\n", .{});
 }

@@ -518,6 +518,45 @@ function preview(sel) {
 let edModel = [];
 let edSel = 0;
 let edPrevT = 0;
+
+// The hidden picker the "Choose image…" button drives. Decoding happens here: the
+// browser turns any PNG/JPG/WebP into pixels, we hand the RGBA to the wasm under the
+// file's name, set the slide to name it, and preview. The decoded images also need to
+// be re-registered when a saved draft is reopened — the wasm forgot them on reload —
+// so JS keeps them, as data URLs, in the draft's own store (see edImages).
+const imgInput = document.createElement("input");
+imgInput.type = "file"; imgInput.accept = "image/*"; imgInput.hidden = true;
+document.body.appendChild(imgInput);
+const edImages = {};   // name → dataURL, so a reopened draft can re-register them
+
+async function registerImage(name, blobOrDataURL) {
+  const bmp = await createImageBitmap(typeof blobOrDataURL === "string" ? await (await fetch(blobOrDataURL)).blob() : blobOrDataURL);
+  const cv = document.createElement("canvas"); cv.width = bmp.width; cv.height = bmp.height;
+  const cx = cv.getContext("2d"); cx.drawImage(bmp, 0, 0);
+  const rgba = cx.getImageData(0, 0, bmp.width, bmp.height).data;   // Uint8ClampedArray, w*h*4
+  const nameBytes = new TextEncoder().encode(name);
+  const total = nameBytes.length + rgba.length;
+  const ptr = x.zicroDeckBuffer(total);
+  if (!ptr) return false;
+  const buf = new Uint8Array(mem.buffer, ptr, total);
+  buf.set(nameBytes, 0);
+  buf.set(rgba, nameBytes.length);
+  return x.zicroAddImage(nameBytes.length, bmp.width, bmp.height) === 0;
+}
+
+imgInput.onchange = async () => {
+  const f = imgInput.files[0]; imgInput.value = "";
+  if (!f) return;
+  const ok = await registerImage(f.name, f);
+  if (!ok) { edNote("that image could not be decoded", true); return; }
+  // keep it for the draft, so a reload can put it back
+  const rd = new FileReader();
+  rd.onload = () => { edImages[f.name] = rd.result; localStorage.setItem(LS_KEY + "-img", JSON.stringify(edImages)); };
+  rd.readAsDataURL(f);
+  edModel[edSel].image = f.name;
+  edRenderFields();
+  edLivePreview();
+};
 const edNote = (msg, bad) => {
   const n = document.getElementById("ed-note");
   n.textContent = msg || "";
@@ -601,6 +640,19 @@ function edRenderFields() {
   b.appendChild(row);
   b.appendChild(field("Edges", "edge", { select: OPTS.edges }));
 
+  // A picture instead of the scene. The browser decodes it (a tab has no stb_image),
+  // registers the RGBA with the wasm under a name, and the slide names that. So an
+  // image slide previews here exactly as it renders — no filesystem in sight.
+  const imgWrap = document.createElement("div");
+  const il = document.createElement("label"); il.textContent = "Picture (instead of the scene)"; imgWrap.appendChild(il);
+  const irow = document.createElement("div"); irow.id = "ed-cam";
+  const pick = document.createElement("button"); pick.textContent = s.image ? "Replace…" : "Choose image…";
+  const iclear = document.createElement("button"); iclear.textContent = "Clear";
+  const iname = document.createElement("span"); iname.className = "val"; iname.textContent = s.image || "— the live scene";
+  pick.onclick = () => imgInput.click();
+  iclear.onclick = () => { s.image = ""; iname.textContent = "— the live scene"; pick.textContent = "Choose image…"; edLivePreview(); };
+  irow.append(pick, iclear, iname); imgWrap.appendChild(irow); b.appendChild(imgWrap);
+
   // camera capture
   const camWrap = document.createElement("div");
   const cl = document.createElement("label"); cl.textContent = "Camera"; camWrap.appendChild(cl);
@@ -667,10 +719,18 @@ document.getElementById("ed-save").onclick = () => {
 };
 
 // A draft from a previous visit becomes the deck as soon as the demo boots, so the
-// author's work is where they left it.
-(function restoreDraft() {
+// author's work is where they left it — but its pictures must be re-registered first,
+// because the wasm forgot them on reload; a slide that named one would come up blank.
+(async function restoreDraft() {
   const draft = localStorage.getItem(LS_KEY);
   if (!draft) return;
+  try {
+    const imgs = JSON.parse(localStorage.getItem(LS_KEY + "-img") || "{}");
+    for (const [name, url] of Object.entries(imgs)) {
+      edImages[name] = url;
+      await registerImage(name, url);
+    }
+  } catch {}
   const bytes = new TextEncoder().encode(draft);
   const ptr = x.zicroDeckBuffer(bytes.length);
   if (!ptr) return;

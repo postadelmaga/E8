@@ -42,7 +42,15 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !Still {
     // The `else` keeps the filesystem out of the wasm build's ANALYSIS, not just
     // out of its execution (see deck.zig).
     if (comptime platform.web) {
-        return error.NoPicturesInATabYet;
+        // In a tab the picture was decoded by the browser and registered under this
+        // name (webimage.zig); there is nothing to open. The pixels are COPIED, because
+        // a Still frees its own rgba when the slide leaves, and the registry keeps its.
+        const webimage = @import("webimage.zig");
+        const img = webimage.get(path) orelse return error.NoSuchPicture;
+        const pixels = try gpa.dupe(u8, img.rgba);
+        errdefer gpa.free(pixels);
+        const owned_path = try gpa.dupe(u8, path);
+        return .{ .gpa = gpa, .path = owned_path, .w = img.w, .h = img.h, .rgba = pixels };
     } else {
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_bytes));
         defer gpa.free(bytes);

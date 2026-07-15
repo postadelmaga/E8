@@ -25,6 +25,8 @@ const deck_mod = @import("deck.zig");
 const deck_write = @import("deck_write.zig");
 const slides = @import("plugins/slides.zig");
 const panel = @import("plugins/panel.zig");
+const webimage = @import("webimage.zig");
+const still_mod = @import("still.zig");
 const App = app_mod.App;
 const D = app_mod.D;
 
@@ -304,6 +306,22 @@ export fn zicroCamera() usize {
     return @intFromPtr(&g_cam_out);
 }
 
+/// A picture the browser decoded, for a slide's `image` field. The page decodes it
+/// (the browser has a decoder; a tab has no stb_image) and hands over straight RGBA;
+/// this registers it under `name`, which is what the slide names. The name and its
+/// RGBA are written into a buffer lent by `zicroDeckBuffer`, laid out as: the name,
+/// then the pixels, and JS passes where the split is. Returns 0 on success.
+export fn zicroAddImage(name_len: u32, w: u32, h: u32) u32 {
+    if (!g_booted or g_deck_buf.len == 0) return 1;
+    const nl: usize = name_len;
+    const need = @as(usize, w) * h * 4;
+    if (nl + need > g_deck_buf.len) return 1;
+    const name = g_deck_buf[0..nl];
+    const rgba = g_deck_buf[nl .. nl + need];
+    webimage.put(name, w, h, rgba) catch return 1;
+    return 0;
+}
+
 fn dot3(a: [3]f32, b: [3]f32) f32 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
@@ -363,6 +381,26 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
         app_mod.storeF32(&app_mod.cam_dist, 4.2);
     }
     if (g_app.renorm_basis) geom.orthonormalize(&g_app.basis);
+
+    // A picture slide: the still IS the scene. It is composed into the software frame
+    // and blitted where the 3D would have gone; the panel keeps narrating beside it.
+    // No point is projected or rasterized on these frames — the same short-circuit the
+    // native loop takes (main.zig), minus the video-plane teardown a tab never had.
+    if (g_app.still) |pic| {
+        g_cpu.ensure(rw, rh) catch return;
+        still_mod.compose(pic, g_cpu.fb, rw, rh);
+        const sox: f32 = @floatFromInt(content.x + (content.w -| g_app.reserve_w -| rw) / 2);
+        const soy: f32 = @floatFromInt(content.y + 78);
+        canvas.blitRgba(@intFromFloat(sox), @intFromFloat(soy), g_cpu.fb, rw, rh, .{});
+        hud_mod.Hud.onDraw(canvas, content, hud);
+        if (g_app.anim - g_last_status > 0.5 or g_app.status_dirty) {
+            g_last_status = g_app.anim;
+            var buf: [256]u8 = undefined;
+            hud.setLine1(app_mod.buildStatus(&g_app, &buf));
+            g_app.status_dirty = false;
+        }
+        return;
+    }
 
     const n_pts = g_app.count();
     for (g_app.points, 0..) |*r, i| {
@@ -485,6 +523,8 @@ var g_last_status: f32 = 0;
 /// wasm has no main: JS calls this once.
 export fn zicroBoot() void {
     if (g_booted) return;
+
+    webimage.init(gpa); // the registry a slide's picture is looked up in (webimage.zig)
 
     const points = app_mod.loadPoints(gpa, undefined) catch return; // generated: no io
     const edges = D.buildEdges(gpa, points) catch return;

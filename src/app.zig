@@ -28,6 +28,7 @@ const hud_mod = @import("hud.zig");
 const domain = @import("domain.zig");
 const descriptor = @import("descriptor.zig");
 const platform = @import("platform.zig");
+const webfile = @import("webfile.zig");
 const still_mod = @import("still.zig");
 
 /// The active domain package (see src/domain.zig).
@@ -379,6 +380,52 @@ pub const App = struct {
     /// The file the points on screen came from.
     pub fn sourceName(a: *const App) []const u8 {
         return if (a.source.len > 0) a.source else a.opened_with;
+    }
+
+    /// The file a browser handed us — dropped on the page, or picked from a phone.
+    ///
+    /// Same surgery as `reloadPoints`, and the same rule: a domain keeps ONE table, so
+    /// the old point system must be gone before the new one is read, and a file that
+    /// then fails to parse would leave an empty window. So the SAMPLE is what we fall
+    /// back to — it is embedded, it always loads, and it is what the page opened with.
+    /// (`reloadPoints` restores the previous file instead; here there is no previous
+    /// file, only previous bytes, and those may be a visitor's rubbish.)
+    ///
+    /// `bytes` is borrowed for the life of the demo: the caller owns them.
+    pub fn openWebFile(a: *App, name: []const u8, bytes: []const u8) !void {
+        // What marks a demo as one that OPENS something is `sample` — not `load`. The
+        // two look interchangeable and are not: mtheory has a `load` that reads no file
+        // at all (E10's roots do not fit a fixed array, so they are generated into one),
+        // and testing for it would compile the fallback below into a demo with no sample
+        // to fall back to. A domain ships a sample exactly when a file is what it wants.
+        //
+        // The `comptime` belongs on the IF's condition: that is what leaves the untaken
+        // branch un-ANALYZED rather than merely un-executed.
+        const can_open = platform.web and @hasDecl(D, "sample");
+        if (comptime !can_open) {
+            return error.ThisDemoGeneratesItsPoints;
+        } else {
+            a.selected = -1;
+            a.info_dirty = true;
+            a.deinitTables();
+            unloadPoints(a.gpa, a.points);
+            a.gpa.free(a.edges);
+            a.points = &.{};
+            a.edges = &.{};
+
+            webfile.set(name, bytes);
+            install(a, name) catch |e| {
+                webfile.set(D.sample_name, D.sample);
+                install(a, D.sample_name) catch @panic("the embedded sample will not load");
+                a.points_changed = true;
+                a.status_dirty = true;
+                dispatchReload(a);
+                return e; // the caller tells the page WHY, and the sample is back up
+            };
+            a.points_changed = true;
+            a.status_dirty = true;
+            dispatchReload(a);
+        }
     }
 
     /// Read `file` into the point system and rebuild everything sized by it.

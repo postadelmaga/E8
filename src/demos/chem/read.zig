@@ -8,6 +8,7 @@
 //! bonds nobody wrote down are inferred from covalent radii.
 
 const std = @import("std");
+const source = @import("../../source.zig");
 
 pub const Element = enum(u8) {
     h,
@@ -284,7 +285,7 @@ fn loadPdb(gpa: std.mem.Allocator, text: []const u8, max_atoms: usize) !Structur
 }
 
 pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, max_atoms: usize) !Structure {
-    const text = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(256 * 1024 * 1024));
+    const text = try source.readAll(gpa, io, path, 256 * 1024 * 1024);
     defer gpa.free(text);
     const pdb = std.mem.endsWith(u8, path, ".pdb") or std.mem.endsWith(u8, path, ".ent") or
         std.mem.indexOf(u8, text[0..@min(text.len, 4096)], "\nATOM  ") != null;

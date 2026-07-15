@@ -29,6 +29,7 @@
   .card:hover, .card:focus-visible { transform:translateY(-3px); border-color:rgba(150,180,235,.5); outline:none; }
   .card:active { transform:translateY(0); }
 
+
   /* The "poster": no screenshots to go stale, no images to download — each figure is
      drawn from the thing itself, in the colours that demo actually uses. */
   .art { position:relative; aspect-ratio:16/10; background:radial-gradient(120% 90% at 50% 40%, #141a28 0%, #04050a 70%); }
@@ -136,11 +137,11 @@
            <circle cx="50" cy="44" r="3.4" fill="#e6eaf2"/><circle cx="92" cy="70" r="3.4" fill="#e6eaf2"/></g></svg></div>
       <div class="meta">
         <div class="title">Structure</div>
-        <div class="sub">Any PDB or XYZ you feed it: CPK colours, bonds inferred from covalent radii, distances on demand.</div>
+        <div class="sub">Any PDB or XYZ you drop on it — CPK colours, bonds from covalent radii, distances on demand. Opens with crambin.</div>
         <span class="tag">3 dimensions</span>
       </div>
-    </a>
-  </div>
+    </div>
+  </a>
 
   <h2>Astronomy</h2>
   <div class="row">
@@ -153,11 +154,11 @@
            <circle cx="146" cy="38" r="1.8" fill="#fff"/><circle cx="66" cy="16" r="1.6" fill="#fff"/></g></svg></div>
       <div class="meta">
         <div class="title">Star catalog</div>
-        <div class="sub">Stars in the space they actually occupy: parsecs, blackbody colour from temperature, the HR diagram.</div>
+        <div class="sub">Stars in the space they occupy — parsecs, blackbody colour, the HR diagram. Opens with the 3,081 within 25 pc; drop your own catalog.</div>
         <span class="tag">3 dimensions</span>
       </div>
-    </a>
-  </div>
+    </div>
+  </a>
 
   <h2>Data</h2>
   <div class="row">
@@ -171,11 +172,11 @@
            <circle cx="116" cy="68" r="4" fill="#7fb2ff"/></g></svg></div>
       <div class="meta">
         <div class="title">Network</div>
-        <div class="sub">Spectral layout, communities, centrality — a graph in the space its own Laplacian chooses.</div>
+        <div class="sub">Spectral layout, communities, centrality. Opens with Zachary's karate club; drop an edge list or GraphML.</div>
         <span class="tag">8 dimensions</span>
       </div>
-    </a>
-    <a class="card" href="demo.html?d=embed">
+    </div>
+    <a class="card" href="demo.html?d=data">
       <div class="art"><svg viewBox="0 0 160 100" aria-hidden="true">
         <g><circle cx="46" cy="36" r="3" fill="#7fb2ff"/><circle cx="54" cy="44" r="3" fill="#7fb2ff"/>
            <circle cx="40" cy="48" r="3" fill="#7fb2ff"/><circle cx="106" cy="34" r="3" fill="#ff7fd0"/>
@@ -184,11 +185,11 @@
            <circle cx="90" cy="80" r="3" fill="#7cf0c8"/></g></svg></div>
       <div class="meta">
         <div class="title">Embeddings</div>
-        <div class="sub">PCA against t-SNE on the same vectors, cosine neighbours on click. The ML field mode.</div>
+        <div class="sub">PCA against t-SNE on the same vectors, cosine neighbours on click. Opens with 1,797 handwritten digits.</div>
         <span class="tag">16 dimensions</span>
       </div>
-    </a>
-    <a class="card" href="demo.html?d=data">
+    </div>
+    <a class="card" href="demo.html?d=embed">
       <div class="art"><svg viewBox="0 0 160 100" aria-hidden="true">
         <g stroke="#2f3a4d" stroke-width=".6"><path d="M28 78 L132 78 M28 78 L28 22"/></g>
         <g><circle cx="44" cy="66" r="3" fill="#7fb2ff"/><circle cx="58" cy="56" r="3" fill="#7fb2ff"/>
@@ -197,11 +198,11 @@
            <circle cx="126" cy="40" r="3" fill="#ff7fd0"/></g></svg></div>
       <div class="meta">
         <div class="title">Dataset</div>
-        <div class="sub">Any CSV, any number of columns: the framework's universal front door.</div>
+        <div class="sub">Any CSV, any number of columns — the universal front door. Opens with Fisher's iris.</div>
         <span class="tag">16 dimensions</span>
       </div>
-    </a>
-  </div>
+    </div>
+  </a>
 </main>
 
 <footer>

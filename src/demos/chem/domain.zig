@@ -16,6 +16,7 @@
 const std = @import("std");
 const read = @import("read.zig");
 const log = @import("../../log.zig");
+const webfile = @import("../../webfile.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -77,16 +78,26 @@ var n_residues: usize = 0;
 
 // --- loading ---------------------------------------------------------------------------------
 
+/// The dataset this demo opens when it is given nothing else — Crambin (PDB 1CRN): 46 residues, the classic small protein.
+/// See demos/SAMPLES.md for where it comes from and under what licence.
+///
+/// It is not a nicety. This demo is a PROFILE: it exists to open a file you bring, and
+/// there are two places where nobody can bring one — a browser tab, which has no
+/// filesystem, and a launch with no argument, which used to end at `error.NoInputFile`,
+/// a message that says what failed and nothing about what to do. Shipping one real
+/// dataset means the demo always has something to show, and your file replaces it.
+pub const sample_name = "1crn.pdb";
+pub const sample: []const u8 = @embedFile("sample.pdb");
+
 pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
-    const path = app_mod.cli.file;
+    var path = app_mod.cli.file;
     if (path.len == 0) {
-        log.print(
-            \\the structure domain needs a file:
-            \\  zig build -Ddemo=chem run -- 1ubq.pdb
-            \\  zig build -Ddemo=chem run -- caffeine.xyz
-            \\
-        , .{});
-        return error.NoInputFile;
+        // Nothing was given, so the demo opens what it came with (demos/SAMPLES.md).
+        // The bytes are already here — embedded — so `source.readAll` will hand them
+        // straight back, on both targets, and no filesystem is consulted at all.
+        webfile.set(sample_name, sample);
+        app_mod.cli.file = sample_name;
+        path = sample_name;
     }
     st = try read.load(gpa, io, path, max_atoms);
     have = true;

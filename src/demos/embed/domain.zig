@@ -23,10 +23,12 @@
 //!   zig build -Ddemo=embed run -- embeddings.csv --class=category --knn=8
 
 const std = @import("std");
+const source = @import("../../source.zig");
 const npy = @import("npy.zig");
 const reduce = @import("reduce.zig");
 const table = @import("../data/table.zig");
 const log = @import("../../log.zig");
+const webfile = @import("../../webfile.zig");
 const geom = @import("../../geom.zig");
 const hud_mod = @import("../../hud.zig");
 const desc = @import("../../descriptor.zig");
@@ -135,7 +137,7 @@ fn cosine(i: usize, j: usize) f32 {
 
 /// Labels from a plain text file (one per line) — how an .npy ships its names.
 fn loadLabelFile(gpa: std.mem.Allocator, io: std.Io, path: []const u8) !void {
-    label_text = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(64 * 1024 * 1024));
+    label_text = try source.readAll(gpa, io, path, 64 * 1024 * 1024);
     var list: std.ArrayList([]const u8) = .empty;
     errdefer list.deinit(gpa);
     var it = std.mem.splitScalar(u8, label_text, '\n');
@@ -176,17 +178,30 @@ fn classesFromLabels(gpa: std.mem.Allocator) !void {
     n_classes = class_names.len;
 }
 
+/// The dataset this demo opens when it is given nothing else — Handwritten digits: 1,797 vectors of 64 pixels — PCA and t-SNE separate them by digit.
+/// See demos/SAMPLES.md for where it comes from and under what licence.
+///
+/// It is not a nicety. This demo is a PROFILE: it exists to open a file you bring, and
+/// there are two places where nobody can bring one — a browser tab, which has no
+/// filesystem, and a launch with no argument, which used to end at `error.NoInputFile`,
+/// a message that says what failed and nothing about what to do. Shipping one real
+/// dataset means the demo always has something to show, and your file replaces it.
+pub const sample_name = "digits.csv";
+pub const sample: []const u8 = @embedFile("sample.csv");
+/// The column that says what each row IS — without it the class would be guessed.
+pub const sample_class = "digit";
+
 pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
     gpa_ref = gpa;
-    const path = app_mod.cli.file;
+    var path = app_mod.cli.file;
     if (path.len == 0) {
-        log.print(
-            \\the embeddings domain needs vectors:
-            \\  zig build -Ddemo=embed run -- vectors.npy [--label=names.txt] [--knn=8]
-            \\  zig build -Ddemo=embed run -- vectors.csv [--class=col] [--label=col]
-            \\
-        , .{});
-        return error.NoInputFile;
+        // Nothing was given, so the demo opens what it came with (demos/SAMPLES.md).
+        // The bytes are already here — embedded — so `source.readAll` will hand them
+        // straight back, on both targets, and no filesystem is consulted at all.
+        webfile.set(sample_name, sample);
+        app_mod.cli.file = sample_name;
+        if (app_mod.cli.class.len == 0) app_mod.cli.class = sample_class;
+        path = sample_name;
     }
 
     if (std.mem.endsWith(u8, path, ".npy")) {

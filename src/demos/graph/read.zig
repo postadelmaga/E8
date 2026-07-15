@@ -7,6 +7,7 @@
 //! That is all a layout needs, and it never fails on a namespace it has not seen.
 
 const std = @import("std");
+const source = @import("../../source.zig");
 
 pub const Graph = struct {
     gpa: std.mem.Allocator,
@@ -118,7 +119,7 @@ fn loadEdgeList(gpa: std.mem.Allocator, text: []u8, max_nodes: usize) !Graph {
 }
 
 pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, max_nodes: usize) !Graph {
-    const text = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(256 * 1024 * 1024));
+    const text = try source.readAll(gpa, io, path, 256 * 1024 * 1024);
     errdefer gpa.free(text);
     const xml = std.mem.endsWith(u8, path, ".graphml") or std.mem.endsWith(u8, path, ".xml") or
         std.mem.indexOf(u8, text[0..@min(text.len, 2048)], "<graphml") != null;

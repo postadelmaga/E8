@@ -5,6 +5,7 @@
 //! refused with a clear error rather than misread.
 
 const std = @import("std");
+const source = @import("../../source.zig");
 
 pub const Matrix = struct {
     gpa: std.mem.Allocator,
@@ -35,7 +36,7 @@ fn headerValue(header: []const u8, key: []const u8) ?[]const u8 {
 }
 
 pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, max_rows: usize) !Matrix {
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(2 * 1024 * 1024 * 1024));
+    const bytes = try source.readAll(gpa, io, path, 2 * 1024 * 1024 * 1024);
     defer gpa.free(bytes);
     if (bytes.len < 12 or !std.mem.eql(u8, bytes[0..6], magic)) return error.NotNpy;
 

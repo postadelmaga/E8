@@ -12,6 +12,7 @@
 //! cell simply makes its column categorical.
 
 const std = @import("std");
+const source = @import("../../source.zig");
 
 pub const Kind = enum { numeric, categorical };
 
@@ -113,7 +114,7 @@ fn parseNum(s: []const u8) ?f32 {
 /// Read `path` as a delimited table. `max_rows` caps what we keep (a catalog of
 /// millions is not something you orbit interactively).
 pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, max_rows: usize) !Table {
-    const text = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(512 * 1024 * 1024));
+    const text = try source.readAll(gpa, io, path, 512 * 1024 * 1024);
     errdefer gpa.free(text);
 
     var lines: std.ArrayList([]const u8) = .empty;

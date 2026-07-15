@@ -50,6 +50,25 @@
   #top .home { border: 1px solid rgba(120,140,180,.30); border-bottom-color: rgba(120,140,180,.30);
                background: rgba(10,12,20,.6); border-radius: 10px; padding: 7px 12px; }
   #src { display: flex; gap: 14px; align-items: center; }
+
+  /* The drop target only appears while something is over the page — a dashed rectangle
+     sitting there permanently would be furniture in front of the figure. */
+  #drop {
+    position: fixed; inset: 12px; z-index: 6; display: none; place-content: center;
+    border: 2px dashed rgba(160,190,240,.65); border-radius: 18px;
+    background: rgba(8,12,22,.72); color: #dbe6f7; font: 17px system-ui, sans-serif;
+  }
+  body.dragging #drop { display: grid; }
+  #toast {
+    position: fixed; left: 50%; top: calc(58px + env(safe-area-inset-top)); transform: translateX(-50%);
+    z-index: 6; display: none; max-width: 90vw; padding: 10px 16px; border-radius: 12px;
+    font: 14px/1.45 system-ui, sans-serif; text-align: center;
+    background: rgba(12,16,26,.92); border: 1px solid rgba(120,140,180,.35); color: #dbe6f7;
+  }
+  #toast.bad { border-color: rgba(240,120,120,.5); color: #ffc4c4; }
+  #toast.show { display: block; }
+  #b-open { display: none; }
+  body.opens #b-open { display: block; }
   @media (max-width: 640px) { #src { display: none; } }   /* a phone has no room for footnotes */
 </style>
 </head>
@@ -68,19 +87,42 @@
 <div id="touchbar">
   <button id="b-prev" aria-label="Previous slide">‹</button>
   <button id="b-next" class="wide" aria-label="Next slide">Next ›</button>
+  <button id="b-open" aria-label="Open a file">Open…</button>
   <button id="b-help" aria-label="Shortcuts">?</button>
   <button id="b-full" aria-label="Fullscreen">⤢</button>
 </div>
 <div id="err"></div>
+<div id="drop">Drop it — this demo will read it</div>
+<div id="toast"></div>
+<input id="file" type="file" hidden />
 
 <script type="module">
 // The interactive paper, in a tab. The wasm module IS the app — the same domain,
 // plugins and software rasterizer the native build runs (src/web.zig). This harness
 // instantiates ONE demo (the domain is a comptime seam: one module per demo), drives
 // rAF, blits the RGBA buffer, and turns DOM events into the ABI the app already has.
-const DEMOS = ["lisi","mtheory","polytope","molecule"];
+const DEMOS = ["lisi","mtheory","polytope","molecule","chem","astro","graph","data","embed"];
+// The five profiles open a file you bring. They ship a real sample so the page is never
+// empty (src/demos/SAMPLES.md) — but the sample is the invitation, not the point.
+const OPENS = {
+  chem:  { accept: ".pdb,.ent,.xyz",             what: "a structure (PDB or XYZ)" },
+  astro: { accept: ".csv,.tsv,.txt",             what: "a star catalog (CSV: ra, dec, dist or parallax…)" },
+  graph: { accept: ".csv,.txt,.edges,.graphml",  what: "an edge list or GraphML" },
+  data:  { accept: ".csv,.tsv,.txt",             what: "any CSV" },
+  embed: { accept: ".csv,.tsv,.npy",             what: "vectors (CSV or .npy)" },
+};
 const params = new URLSearchParams(location.search);
-const demo = DEMOS.includes(params.get("d")) ? params.get("d") : "lisi";
+const asked = params.get("d");
+// A demo we do not carry must SAY so. Falling back to the default silently is how the
+// star catalog came up as E8 — the worst possible answer, because it looks like one.
+if (asked && !DEMOS.includes(asked)) {
+  document.getElementById("load").style.display = "none";
+  document.getElementById("err").style.display = "grid";
+  document.getElementById("err").textContent =
+    `"${asked}" is not in the browser yet — it is a profile that opens a file you bring, and this page cannot hand it one. Go back and pick another.`;
+  throw new Error("demo not on the web: " + asked);
+}
+const demo = asked || "lisi";
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d", { alpha: false });
@@ -243,6 +285,64 @@ document.getElementById("b-full").onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen?.().catch(() => {});
 };
+
+// --- the file the visitor brings ---------------------------------------------------
+// Same path for a drop (desktop) and a pick (phone): read the bytes, hand them to the
+// wasm, and let the APP decide whether they are a structure. If they are not, it puts
+// the sample back and says so — a viewer that silently shows something else is worse
+// than one that says no.
+const opens = OPENS[demo];
+if (opens) {
+  document.body.classList.add("opens");
+  document.getElementById("file").accept = opens.accept;
+  document.getElementById("drop").textContent = `Drop ${opens.what}`;
+}
+
+const toast = document.getElementById("toast");
+let toastT = 0;
+function say(msg, bad) {
+  toast.textContent = msg;
+  toast.className = "show" + (bad ? " bad" : "");
+  clearTimeout(toastT);
+  toastT = setTimeout(() => { toast.className = ""; }, 4200);
+}
+
+// The name and the bytes each need a buffer, and one call lends one buffer — so the name
+// goes over FIRST, into that scratch, and the module copies it into a home of its own
+// before the next call hands the scratch to the file itself.
+async function openFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const nameBytes = new TextEncoder().encode(file.name);
+
+  const nptr = x.zicroFileBuffer(nameBytes.length);
+  if (!nptr) { say("out of memory", true); return; }
+  new Uint8Array(mem.buffer, nptr, nameBytes.length).set(nameBytes);
+  x.zicroFileName(nptr, nameBytes.length);
+
+  const ptr = x.zicroFileBuffer(bytes.length);            // this frees the name scratch
+  if (!ptr) { say("that file is too big for this tab", true); return; }
+  new Uint8Array(mem.buffer, ptr, bytes.length).set(bytes);
+
+  const bad = x.zicroOpenFile();
+  if (bad) say(`${file.name} would not load — the sample is back`, true);
+  else say(`opened ${file.name}`);
+  used();
+}
+
+if (opens) {
+  const fileEl = document.getElementById("file");
+  document.getElementById("b-open").onclick = () => fileEl.click();
+  fileEl.onchange = () => { if (fileEl.files[0]) openFile(fileEl.files[0]); fileEl.value = ""; };
+
+  addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragging"); });
+  addEventListener("dragleave", (e) => { if (e.relatedTarget === null) document.body.classList.remove("dragging"); });
+  addEventListener("drop", (e) => {
+    e.preventDefault();
+    document.body.classList.remove("dragging");
+    const f = e.dataTransfer?.files?.[0];
+    if (f) openFile(f);
+  });
+}
 
 function frame(tMs) {
   x.zicroFrame(tMs);

@@ -120,6 +120,51 @@ export fn zicroTap(x: f32, y: f32) void {
     g_tap_pending = true;
 }
 
+// --- the file the visitor brings ---------------------------------------------------
+//
+// Five of the demos exist to open YOUR data — a structure, a catalog, an edge list, a
+// table. They ship a sample so the page is never empty (demos/SAMPLES.md), but a sample
+// is not the point: the point is the file on your disk, and a browser has one of those.
+// It just does not have a filesystem, so the bytes come across instead of a path.
+//
+// JS asks for a buffer, writes the file into it, and calls `zicroOpenFile`. The buffer
+// STAYS: the domain's tables slice into what it parsed, and the app keeps the bytes as
+// the source it was opened with. Freeing the previous one here is safe — by then the
+// new points are installed, or the sample is back.
+
+var g_file_buf: []u8 = &.{};
+var g_name_buf: [128]u8 = undefined;
+
+/// Give JS a buffer of `len` bytes to write a file into. Returns 0 — which in a wasm
+/// module's address space is not a valid pointer — when the allocation fails, which is
+/// how the page learns the file is bigger than the tab will hold. (The return type is
+/// `usize`, not `[*]u8`: a non-null pointer type cannot BE zero, and Zig says so.)
+export fn zicroFileBuffer(len: u32) usize {
+    const buf = gpa.alloc(u8, len) catch return 0;
+    if (g_file_buf.len > 0) gpa.free(g_file_buf);
+    g_file_buf = buf;
+    return @intFromPtr(buf.ptr);
+}
+
+/// The name goes in a fixed buffer: it is only read for its extension (a PDB is not an
+/// XYZ) and printed in the panel. 128 bytes is a file name; anything longer is a story.
+export fn zicroFileName(ptr: [*]const u8, len: u32) void {
+    const n = @min(len, g_name_buf.len);
+    @memcpy(g_name_buf[0..n], ptr[0..n]);
+    g_file_name = g_name_buf[0..n];
+}
+var g_file_name: []const u8 = "";
+
+/// Open what was written into the buffer. 0 = the demo is showing it; 1 = it would not
+/// load and the sample is back on screen (the page says so — silently reverting to a
+/// figure the visitor did not choose is how a tool loses their trust).
+export fn zicroOpenFile() u32 {
+    if (!g_booted or g_file_buf.len == 0) return 1;
+    if (comptime !@hasDecl(D, "sample")) return 1; // this demo generates its points
+    g_app.openWebFile(g_file_name, g_file_buf) catch return 1;
+    return 0;
+}
+
 fn dot3(a: [3]f32, b: [3]f32) f32 {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
@@ -142,6 +187,19 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
     const rh = std.math.clamp(content.h -| 110, 240, 1200) / 4 * 4;
     hud.frame_w.store(rw, .monotonic);
     hud.frame_h.store(rh, .monotonic);
+
+    // A file the visitor dropped can have any number of points — 34 nodes or 100,000
+    // stars — and the rasterizer's buffers were sized for the ones that came before.
+    // main.zig watches the same flag for the same reason; a frame drawn before this
+    // would write a new catalog through buffers cut for the old one.
+    if (g_app.points_changed) {
+        g_app.points_changed = false;
+        const n = g_app.count();
+        const pairs = @max(g_app.edges.len, n);
+        g_edge_jobs = gpa.realloc(g_edge_jobs, pairs + 64) catch return;
+        g_dot_jobs = gpa.realloc(g_dot_jobs, n) catch return;
+        g_order = gpa.realloc(g_order, n) catch return;
+    }
 
     g_app.dt = 1.0 / 60.0; // the browser paces us; a frame is a frame
     g_app.anim += g_app.dt;

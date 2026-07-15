@@ -228,12 +228,11 @@ pub fn build(b: *std.Build) void {
         // (web/index.html) lists them, and `demo.html?d=<name>` instantiates exactly
         // one — which is also what a browser wants, since nobody downloads nine
         // demos to look at one.
-        // The FOUR that generate their own points. The other five demos are profiles:
-        // they exist to open a file you bring (a PDB, a catalog, a CSV), and a tab has
-        // no file to give them — so they are not in the gallery until it can (upload,
-        // or a bundled sample).
-        const web_demos = [_][]const u8{ "lisi", "mtheory", "polytope", "molecule" };
-        for (web_demos) |name| {
+        // ALL NINE. The four that generate their points always could; the five profiles
+        // now ship a real dataset each (demos/SAMPLES.md), embedded, so a tab that has
+        // no file to give them still has something to show — and a visitor can drop
+        // their own file on the page to replace it.
+        for (demos) |name| {
             const web_opt = b.addOptions();
             web_opt.addOption([]const u8, "demo", name);
 

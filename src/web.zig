@@ -21,6 +21,10 @@ const hud_mod = @import("hud.zig");
 const render_cpu = @import("render_cpu.zig");
 const app_mod = @import("app.zig");
 const keys = @import("keys.zig");
+const deck_mod = @import("deck.zig");
+const deck_write = @import("deck_write.zig");
+const slides = @import("plugins/slides.zig");
+const panel = @import("plugins/panel.zig");
 const App = app_mod.App;
 const D = app_mod.D;
 
@@ -163,6 +167,141 @@ export fn zicroOpenFile() u32 {
     if (comptime !@hasDecl(D, "sample")) return 1; // this demo generates its points
     g_app.openWebFile(g_file_name, g_file_buf) catch return 1;
     return 0;
+}
+
+// --- the editor, in a tab ----------------------------------------------------------
+//
+// The native editor is its own glass window with its own thread (editor.zig,
+// native_only), because zrame's widgets want all five window callbacks and the main
+// window spends them on the orbit and the pick. A tab cannot open a second window —
+// but it has something the native build does not: a DOM, with real text fields and a
+// keyboard that already knows about phones. So on the web the editor is HTML, and the
+// wasm's part shrinks to the one idea that made the native editor honest:
+//
+//   the editor never hands slide structs across a boundary. It produces ZON text, and
+//   the app parses that and swaps the deck in — the SAME path F5 takes. "Preview" is
+//   therefore not a second renderer that could drift from the real one; it is the real
+//   one. What the page shows is exactly what a saved deck.zon would say.
+//
+// So the wasm exposes three things: the current deck as ZON (to load into the fields),
+// a way to hand ZON back (to preview), and the domain's own option tables (so the
+// dropdowns are the demo's real presets and colours, not a hardcoded guess).
+
+var g_zon_out: []u8 = &.{};
+
+/// The live deck, serialized to ZON — what the editor opens with. Pointer into wasm
+/// memory; `zicroDeckZonLen` gives the length. 0 on failure.
+export fn zicroDeckZon() usize {
+    if (!g_booted) return 0;
+    const sl = g_app.pluginState(slides);
+    if (g_zon_out.len > 0) gpa.free(g_zon_out);
+    g_zon_out = deck_write.toStringAlloc(gpa, sl.deck) catch {
+        g_zon_out = &.{};
+        return 0;
+    };
+    return @intFromPtr(g_zon_out.ptr);
+}
+export fn zicroDeckZonLen() u32 {
+    return @intCast(g_zon_out.len);
+}
+
+/// A buffer to write a new deck's ZON into, then `zicroApplyDeck`. Same lend-a-buffer
+/// dance as the file open: JS asks for `len` bytes and writes into what it gets back.
+var g_deck_buf: []u8 = &.{};
+export fn zicroDeckBuffer(len: u32) usize {
+    const b = gpa.alloc(u8, len) catch return 0;
+    if (g_deck_buf.len > 0) gpa.free(g_deck_buf);
+    g_deck_buf = b;
+    return @intFromPtr(b.ptr);
+}
+
+/// Parse the ZON in the buffer and make it the live deck — the F5 path exactly. Shows
+/// slide `sel` after, and opens the panel so the preview is visible. Returns 0 if it
+/// parsed, 1 if it did not (the old deck stays; the page keeps the text to fix).
+export fn zicroApplyDeck(sel: u32) u32 {
+    if (!g_booted or g_deck_buf.len == 0) return 1;
+    const sl = g_app.pluginState(slides);
+    const z = gpa.dupeZ(u8, g_deck_buf) catch return 1;
+    defer gpa.free(z);
+    const d = deck_mod.parse(gpa, z) catch return 1;
+    deck_mod.deinit(gpa, sl.deck);
+    sl.deck = d;
+    if (d.slides.len == 0) return 0;
+    sl.idx = @min(sel, d.slides.len - 1);
+    if (!g_app.pluginState(panel).on) panel.setOpen(&g_app, true);
+    slides.show(&g_app, sl.idx);
+    return 0;
+}
+
+/// The domain's own option tables, as JSON — so the editor's dropdowns are the demo's
+/// real presets, colour modes, filters and edge relations, and a new domain gets a
+/// working editor with no editor change (the native editor reads the same tables).
+var g_opts: []u8 = &.{};
+const OptBuf = struct {
+    l: std.ArrayList(u8) = .empty,
+    first: bool = true,
+    fn raw(b: *OptBuf, s: []const u8) void {
+        b.l.appendSlice(gpa, s) catch {};
+    }
+    fn str(b: *OptBuf, s: []const u8) void {
+        b.l.append(gpa, '"') catch {};
+        for (s) |c| {
+            if (c == '"' or c == '\\') b.l.append(gpa, '\\') catch {};
+            b.l.append(gpa, c) catch {};
+        }
+        b.l.append(gpa, '"') catch {};
+    }
+    fn open(b: *OptBuf, label: []const u8, lead_dash: bool) void {
+        b.str(label);
+        b.raw(":[");
+        b.first = true;
+        if (lead_dash) b.item("—");
+    }
+    fn item(b: *OptBuf, n: []const u8) void {
+        if (!b.first) b.raw(",");
+        b.first = false;
+        b.str(n);
+    }
+};
+export fn zicroOptions() usize {
+    if (g_opts.len > 0) return @intFromPtr(g_opts.ptr); // built once; the tables are static
+    var b: OptBuf = .{};
+    b.raw("{");
+    // The tables may be comptime arrays or runtime slices depending on the domain, so
+    // each is streamed straight into the JSON — no fixed-size intermediary to demand a
+    // comptime length the domain does not promise.
+    b.open("presets", false);
+    for (D.presets) |p| b.item(p.name);
+    b.raw("],");
+    b.open("colors", true);
+    for (D.color_modes) |c| b.item(c.name);
+    b.raw("],");
+    b.open("filters", true);
+    for (D.filters) |f| b.item(f.name);
+    b.raw("],");
+    b.open("edges", false); // the framework's three, then the domain's relations
+    b.item("off");
+    b.item("selection");
+    b.item("all");
+    for (D.relations) |r| b.item(r.name);
+    b.raw("]}");
+    g_opts = b.l.toOwnedSlice(gpa) catch &.{};
+    return @intFromPtr(g_opts.ptr);
+}
+export fn zicroOptionsLen() u32 {
+    return @intCast(g_opts.len);
+}
+
+/// The live camera (yaw, pitch, dist) — so the editor's "use current view" writes the
+/// angle you actually orbited to, not a guess. Three f32 at the returned pointer.
+var g_cam_out: [3]f32 = .{ 0, 0, 0 };
+export fn zicroCamera() usize {
+    g_cam_out = .{
+        app_mod.loadF32(&app_mod.cam_yaw),
+        app_mod.loadF32(&app_mod.cam_pitch),
+        app_mod.loadF32(&app_mod.cam_dist),
+    };
+    return @intFromPtr(&g_cam_out);
 }
 
 fn dot3(a: [3]f32, b: [3]f32) f32 {

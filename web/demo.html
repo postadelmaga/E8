@@ -70,6 +70,59 @@
   #b-open { display: none; }
   body.opens #b-open { display: block; }
   @media (max-width: 640px) { #src { display: none; } }   /* a phone has no room for footnotes */
+
+  /* The editor. A drawer over the scene, not a second window — a tab has only the one,
+     and on a phone the scene BEHIND the drawer is the live preview. Real inputs, so the
+     phone keyboard is the phone's own, and the fields are the deck's fields. */
+  #editor {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 7; width: min(420px, 100vw);
+    transform: translateX(100%); transition: transform .28s cubic-bezier(.4,0,.2,1);
+    background: rgba(9,11,17,.97); border-left: 1px solid rgba(120,140,180,.25);
+    display: flex; flex-direction: column; color: #dbe6f7; font: 14px/1.5 system-ui, sans-serif;
+  }
+  body.editing #editor { transform: translateX(0); box-shadow: -30px 0 60px rgba(0,0,0,.5); }
+  /* On a phone the drawer is the whole screen, and the scene peeks through a strip on top. */
+  @media (max-width: 520px) { #editor { width: 100vw; } }
+
+  #ed-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px calc(12px + env(safe-area-inset-top));
+             padding-top: calc(12px + env(safe-area-inset-top)); border-bottom: 1px solid rgba(120,140,180,.18); }
+  #ed-head b { font-weight: 650; font-size: 15px; }
+  #ed-head .sp { flex: 1; }
+  #ed-head button { min-height: 38px; padding: 0 12px; border-radius: 9px; font: 14px system-ui; color: #dbe6f7;
+                    background: rgba(30,36,52,.9); border: 1px solid rgba(120,140,180,.3); }
+  #ed-head button.primary { color: #0a0c12; background: #9fc0f0; border-color: #9fc0f0; font-weight: 600; }
+  #ed-head button:active { filter: brightness(1.2); }
+
+  /* The slide strip: one chip per slide, plus a + to add. Tap selects; the scene and
+     the fields follow. */
+  #ed-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 10px 14px; border-bottom: 1px solid rgba(120,140,180,.14); }
+  #ed-tabs button { flex: 0 0 auto; min-width: 34px; min-height: 34px; border-radius: 8px; font: 13px system-ui;
+                    color: #b9c6dc; background: rgba(28,34,48,.8); border: 1px solid rgba(120,140,180,.22); }
+  #ed-tabs button.on { color: #0a0c12; background: #f0e2aa; border-color: #f0e2aa; font-weight: 600; }
+  #ed-tabs button.add { color: #9fc0f0; }
+
+  #ed-body { flex: 1; overflow-y: auto; padding: 12px 14px 40px; -webkit-overflow-scrolling: touch; }
+  #ed-body label { display: block; margin: 12px 0 4px; font-size: 12px; letter-spacing: .04em; color: #93a1ba; text-transform: uppercase; }
+  #ed-body input[type=text], #ed-body textarea, #ed-body select, #ed-body input[type=number] {
+    width: 100%; box-sizing: border-box; padding: 9px 10px; border-radius: 9px; font: 14px/1.45 system-ui;
+    color: #eaf0f8; background: rgba(20,24,34,.9); border: 1px solid rgba(120,140,180,.28);
+  }
+  #ed-body textarea { min-height: 92px; resize: vertical; }
+  #ed-body input:focus, #ed-body textarea:focus, #ed-body select:focus { outline: none; border-color: #9fc0f0; }
+  .ed-row { display: flex; gap: 10px; }
+  .ed-row > div { flex: 1; }
+  .ed-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+  .ed-check input { width: 20px; height: 20px; }
+  .ed-check label { margin: 0; text-transform: none; letter-spacing: 0; font-size: 14px; color: #dbe6f7; }
+  #ed-cam { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  #ed-cam button { min-height: 34px; padding: 0 11px; border-radius: 8px; font: 13px system-ui; color: #dbe6f7;
+                   background: rgba(30,36,52,.9); border: 1px solid rgba(120,140,180,.3); }
+  #ed-cam .val { font: 12px ui-monospace, monospace; color: #93a1ba; }
+  #ed-del { margin-top: 22px; width: 100%; min-height: 40px; border-radius: 9px; font: 14px system-ui; color: #ffb4b4;
+            background: rgba(50,20,24,.6); border: 1px solid rgba(200,90,90,.35); }
+  #ed-note { padding: 8px 14px; font-size: 13px; color: #f0c674; min-height: 20px; }
+  #ed-note.bad { color: #ff9d9d; }
+  body.editing #b-edit { background: rgba(60,70,96,.9); }
 </style>
 </head>
 <body>
@@ -88,6 +141,7 @@
   <button id="b-prev" aria-label="Previous slide">‹</button>
   <button id="b-next" class="wide" aria-label="Next slide">Next ›</button>
   <button id="b-open" aria-label="Open a file">Open…</button>
+  <button id="b-edit" aria-label="Edit the deck">Edit</button>
   <button id="b-help" aria-label="Shortcuts">?</button>
   <button id="b-full" aria-label="Fullscreen">⤢</button>
 </div>
@@ -95,6 +149,19 @@
 <div id="drop">Drop it — this demo will read it</div>
 <div id="toast"></div>
 <input id="file" type="file" hidden />
+
+<!-- The editor drawer. Populated once the wasm is up (it needs the domain's option
+     tables and the live deck). The scene behind it stays live — it is the preview. -->
+<aside id="editor" aria-hidden="true">
+  <div id="ed-head">
+    <b>Deck editor</b><span class="sp"></span>
+    <button id="ed-save" class="primary">Save</button>
+    <button id="ed-close">Done</button>
+  </div>
+  <div id="ed-tabs"></div>
+  <div id="ed-body"></div>
+  <div id="ed-note"></div>
+</aside>
 
 <script type="module">
 // The interactive paper, in a tab. The wasm module IS the app — the same domain,
@@ -343,6 +410,273 @@ if (opens) {
     if (f) openFile(f);
   });
 }
+
+// --- the editor ---------------------------------------------------------------------
+// The wasm owns the truth: it hands over the live deck as ZON and the domain's own
+// option tables, it takes a deck back as ZON and previews it (the F5 path, so the
+// preview cannot drift from the real render), and it reads the live camera. The page
+// owns the FORM: real inputs, the phone's own keyboard, and a model that serializes to
+// exactly the ZON `deck_write.zig` produces — so a deck saved here reloads natively.
+
+const strAt = (ptr, len) => new TextDecoder().decode(new Uint8Array(mem.buffer, ptr, len));
+const OPTS = JSON.parse(strAt(x.zicroOptions(), x.zicroOptionsLen()));
+const LS_KEY = "e8-deck-" + demo;
+
+// ZON string escaping — the same set deck_write.zig's escapeBody writes.
+function zescape(s) {
+  let o = "";
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (ch === '"') o += '\\"';
+    else if (ch === "\\") o += "\\\\";
+    else if (ch === "\n") o += "\\n";
+    else if (ch === "\r") o += "\\r";
+    else if (ch === "\t") o += "\\t";
+    else if (c < 0x20 || c === 0x7f) o += "\\x" + c.toString(16).padStart(2, "0");
+    else o += ch;
+  }
+  return o;
+}
+function zunescape(s) {
+  return s.replace(/\\x([0-9a-fA-F]{2})|\\(.)/g, (_, hex, ch) => {
+    if (hex) return String.fromCharCode(parseInt(hex, 16));
+    return { n: "\n", r: "\r", t: "\t", '"': '"', "\\": "\\" }[ch] ?? ch;
+  });
+}
+
+// A parser for exactly the ZON `toStringAlloc` emits — regular `.field = value,` lines,
+// one slide per `.{ … },`. Not a general ZON parser; it does not need to be.
+function parseDeck(zon) {
+  const slides = [];
+  // strip the leading comment block and outer wrapper by working slide by slide
+  const slideRe = /\.\{\s*([\s\S]*?)\n\s*\},/g;
+  // the OUTER `.{ .slides = .{ … } }` also matches; skip any block with no `.title`
+  let m;
+  while ((m = slideRe.exec(zon))) {
+    const block = m[1];
+    if (!/\.title\s*=/.test(block)) continue;
+    const s = blankSlide();
+    const strField = (name) => {
+      const r = new RegExp("\\." + name + '\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"');
+      const mm = r.exec(block);
+      return mm ? zunescape(mm[1]) : null;
+    };
+    for (const f of ["title", "body", "cite", "image", "data", "preset", "color", "edge", "filter", "fig"]) {
+      const v = strField(f);
+      if (v !== null) s[f] = v;
+    }
+    const dwell = /\.dwell\s*=\s*([\d.]+)/.exec(block);
+    if (dwell) s.dwell = parseFloat(dwell[1]);
+    s.tumble = /\.tumble\s*=\s*true/.test(block);
+    const cam = /\.cam\s*=\s*\.\{\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)/.exec(block);
+    if (cam) s.cam = [parseFloat(cam[1]), parseFloat(cam[2]), parseFloat(cam[3])];
+    slides.push(s);
+  }
+  return slides;
+}
+
+function blankSlide() {
+  return { title: "", body: "", cite: "", image: "", data: "", preset: OPTS.presets[0] || "",
+           color: "", edge: "all", filter: "", fig: "", tumble: false, dwell: 22, cam: null };
+}
+
+// Model → ZON, matching deck_write.zig field for field (optional fields omitted when
+// empty / at their default, so the round trip is stable).
+function serializeDeck(slides) {
+  let o = "// Authored in the E8 web editor.\n.{\n    .slides = .{\n";
+  for (const s of slides) {
+    o += "        .{\n";
+    o += `            .title = "${zescape(s.title)}",\n`;
+    o += `            .body = "${zescape(s.body)}",\n`;
+    if (s.cite) o += `            .cite = "${zescape(s.cite)}",\n`;
+    if (s.image) o += `            .image = "${zescape(s.image)}",\n`;
+    if (s.data) o += `            .data = "${zescape(s.data)}",\n`;
+    o += `            .preset = "${zescape(s.preset)}",\n`;
+    if (s.color && s.color !== "—") o += `            .color = "${zescape(s.color)}",\n`;
+    if (s.edge && s.edge !== "all") o += `            .edge = "${zescape(s.edge)}",\n`;
+    if (s.filter && s.filter !== "—") o += `            .filter = "${zescape(s.filter)}",\n`;
+    if (s.fig) o += `            .fig = "${zescape(s.fig)}",\n`;
+    if (s.cam) o += `            .cam = .{ ${s.cam[0].toFixed(4)}, ${s.cam[1].toFixed(4)}, ${s.cam[2].toFixed(4)} },\n`;
+    if (s.tumble) o += `            .tumble = true,\n`;
+    if (s.dwell !== 22) o += `            .dwell = ${s.dwell},\n`;
+    o += "        },\n";
+  }
+  o += "    },\n}\n";
+  return o;
+}
+
+// Push the model to the wasm and preview slide `sel`. Returns true if it parsed.
+function preview(sel) {
+  const zon = serializeDeck(edModel);
+  const bytes = new TextEncoder().encode(zon);
+  const ptr = x.zicroDeckBuffer(bytes.length);
+  if (!ptr) return false;
+  new Uint8Array(mem.buffer, ptr, bytes.length).set(bytes);
+  return x.zicroApplyDeck(sel) === 0;
+}
+
+let edModel = [];
+let edSel = 0;
+let edPrevT = 0;
+const edNote = (msg, bad) => {
+  const n = document.getElementById("ed-note");
+  n.textContent = msg || "";
+  n.className = bad ? "bad" : "";
+};
+
+function edLivePreview() {
+  clearTimeout(edPrevT);
+  edPrevT = setTimeout(() => {
+    const ok = preview(edSel);
+    edNote(ok ? "" : "this slide has something the deck cannot parse", !ok);
+  }, 140);
+}
+
+function edRenderTabs() {
+  const t = document.getElementById("ed-tabs");
+  t.innerHTML = "";
+  edModel.forEach((s, i) => {
+    const b = document.createElement("button");
+    b.textContent = i + 1;
+    if (i === edSel) b.className = "on";
+    b.title = s.title || `slide ${i + 1}`;
+    b.onclick = () => { edSel = i; edRenderTabs(); edRenderFields(); preview(edSel); };
+    t.appendChild(b);
+  });
+  const add = document.createElement("button");
+  add.className = "add"; add.textContent = "+"; add.title = "Add a slide";
+  add.onclick = () => {
+    const s = blankSlide();
+    // a new slide inherits the current view, so it starts looking where you are
+    const c = new Float32Array(mem.buffer, x.zicroCamera(), 3);
+    s.cam = [c[0], c[1], c[2]];
+    edModel.splice(edSel + 1, 0, s);
+    edSel += 1;
+    edRenderTabs(); edRenderFields(); edLivePreview();
+  };
+  t.appendChild(add);
+}
+
+function field(label, key, opts) {
+  const wrap = document.createElement("div");
+  const l = document.createElement("label"); l.textContent = label; wrap.appendChild(l);
+  const s = edModel[edSel];
+  let el;
+  if (opts && opts.select) {
+    el = document.createElement("select");
+    for (const o of opts.select) {
+      const op = document.createElement("option"); op.value = o; op.textContent = o;
+      if ((s[key] || (key === "edge" ? "all" : opts.select[0])) === o) op.selected = true;
+      el.appendChild(op);
+    }
+    el.onchange = () => { s[key] = el.value; edLivePreview(); if (key === "title") edRenderTabs(); };
+  } else if (opts && opts.area) {
+    el = document.createElement("textarea");
+    el.value = s[key];
+    el.oninput = () => { s[key] = el.value; edLivePreview(); };
+  } else if (opts && opts.num) {
+    el = document.createElement("input"); el.type = "number"; el.value = s[key]; el.step = opts.step || 1;
+    el.oninput = () => { s[key] = parseFloat(el.value) || 0; edLivePreview(); };
+  } else {
+    el = document.createElement("input"); el.type = "text"; el.value = s[key];
+    el.placeholder = opts && opts.ph || "";
+    el.oninput = () => { s[key] = el.value; edLivePreview(); if (key === "title") edRenderTabs(); };
+  }
+  wrap.appendChild(el);
+  return wrap;
+}
+
+function edRenderFields() {
+  const b = document.getElementById("ed-body");
+  b.innerHTML = "";
+  if (!edModel.length) { b.innerHTML = "<p style='color:#93a1ba'>No slides. Press + to add one.</p>"; return; }
+  const s = edModel[edSel];
+  b.appendChild(field("Title", "title", { ph: "What this slide is about" }));
+  b.appendChild(field("Body", "body", { area: true }));
+  b.appendChild(field("Citation", "cite", { ph: "optional — a source line" }));
+  b.appendChild(field("Preset (view)", "preset", { select: OPTS.presets }));
+  const row = document.createElement("div"); row.className = "ed-row";
+  row.appendChild(field("Colour", "color", { select: OPTS.colors }));
+  row.appendChild(field("Filter", "filter", { select: OPTS.filters }));
+  b.appendChild(row);
+  b.appendChild(field("Edges", "edge", { select: OPTS.edges }));
+
+  // camera capture
+  const camWrap = document.createElement("div");
+  const cl = document.createElement("label"); cl.textContent = "Camera"; camWrap.appendChild(cl);
+  const cam = document.createElement("div"); cam.id = "ed-cam";
+  const use = document.createElement("button"); use.textContent = "Use current view";
+  const clear = document.createElement("button"); clear.textContent = "Clear";
+  const val = document.createElement("span"); val.className = "val";
+  const showCam = () => { val.textContent = s.cam ? `yaw ${s.cam[0].toFixed(2)} · pitch ${s.cam[1].toFixed(2)} · dist ${s.cam[2].toFixed(1)}` : "— follows the slide"; };
+  use.onclick = () => { const c = new Float32Array(mem.buffer, x.zicroCamera(), 3); s.cam = [c[0], c[1], c[2]]; showCam(); edLivePreview(); };
+  clear.onclick = () => { s.cam = null; showCam(); edLivePreview(); };
+  showCam();
+  cam.append(use, clear, val); camWrap.appendChild(cam); b.appendChild(camWrap);
+
+  const row2 = document.createElement("div"); row2.className = "ed-row";
+  row2.appendChild(field("Dwell (s)", "dwell", { num: true, step: 1 }));
+  b.appendChild(row2);
+
+  const tw = document.createElement("div"); tw.className = "ed-check";
+  const cb = document.createElement("input"); cb.type = "checkbox"; cb.id = "ed-tumble"; cb.checked = s.tumble;
+  cb.onchange = () => { s.tumble = cb.checked; edLivePreview(); };
+  const tl = document.createElement("label"); tl.htmlFor = "ed-tumble"; tl.textContent = "Tumble (auto-rotate)";
+  tw.append(cb, tl); b.appendChild(tw);
+
+  const del = document.createElement("button"); del.id = "ed-del"; del.textContent = "Delete this slide";
+  del.onclick = () => {
+    if (edModel.length <= 1) { edNote("a deck needs at least one slide", true); return; }
+    edModel.splice(edSel, 1);
+    edSel = Math.max(0, edSel - 1);
+    edRenderTabs(); edRenderFields(); edLivePreview();
+  };
+  b.appendChild(del);
+}
+
+function openEditor() {
+  if (!edModel.length) {
+    const draft = localStorage.getItem(LS_KEY);
+    edModel = parseDeck(draft || strAt(x.zicroDeckZon(), x.zicroDeckZonLen()));
+    if (!edModel.length) edModel = [blankSlide()];
+  }
+  edSel = 0;
+  document.body.classList.add("editing");
+  document.getElementById("editor").setAttribute("aria-hidden", "false");
+  edRenderTabs(); edRenderFields();
+  preview(edSel);
+}
+function closeEditor() {
+  document.body.classList.remove("editing");
+  document.getElementById("editor").setAttribute("aria-hidden", "true");
+  canvas.focus();
+}
+
+document.getElementById("b-edit").onclick = () => {
+  if (document.body.classList.contains("editing")) closeEditor(); else openEditor();
+};
+document.getElementById("ed-close").onclick = closeEditor;
+document.getElementById("ed-save").onclick = () => {
+  const zon = serializeDeck(edModel);
+  localStorage.setItem(LS_KEY, zon);                    // survives a reload
+  const blob = new Blob([zon], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `deck-${demo}.zon`;
+  a.click(); URL.revokeObjectURL(a.href);
+  edNote("saved — deck.zon downloaded, and kept in this browser");
+};
+
+// A draft from a previous visit becomes the deck as soon as the demo boots, so the
+// author's work is where they left it.
+(function restoreDraft() {
+  const draft = localStorage.getItem(LS_KEY);
+  if (!draft) return;
+  const bytes = new TextEncoder().encode(draft);
+  const ptr = x.zicroDeckBuffer(bytes.length);
+  if (!ptr) return;
+  new Uint8Array(mem.buffer, ptr, bytes.length).set(bytes);
+  x.zicroApplyDeck(0);   // if it fails, the embedded deck stays — no harm
+})();
 
 function frame(tMs) {
   x.zicroFrame(tMs);

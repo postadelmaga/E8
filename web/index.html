@@ -54,6 +54,9 @@
   .keys { margin-top:10px; }
   .keys kbd { display:inline-block; border:1px solid var(--line); border-radius:6px; padding:1px 6px;
               font:13px/1.5 ui-monospace, monospace; color:#c9d6ea; background:#0c0e14; }
+  .lab { margin-top:14px; padding-top:14px; border-top:1px solid var(--line); }
+  .lab a { color:#f0e2aa; border-bottom-color:rgba(240,226,170,.35); }
+  .lab b { color:#c9d6ea; font-weight:600; }
 </style>
 </head>
 <body>
@@ -218,6 +221,11 @@
     <a href="https://github.com/postadelmaga/Zengine" target="_blank" rel="noopener">Zengine</a> ·
     <a href="https://github.com/postadelmaga/Zrame" target="_blank" rel="noopener">Zrame</a> — Zig, no engine under the browser: the figure is rasterized in software, the same code the native build runs.</div>
   <div class="keys"><kbd>P</kbd> journey · <kbd>H</kbd> every key · <kbd>O</kbd> deck editor · <kbd>F</kbd> fullscreen · drag to orbit · on a phone: tap to turn the page, pinch to zoom.</div>
+  <!-- Named a preview because it is one: the scene, and nothing else yet. Better to say
+       so here than to let someone find the missing half on their own. -->
+  <div class="lab">Lab: <a href="gpu/">the E8 atlas on the GPU</a> — the same 240 roots and 6720 edges
+    handed to <b>WebGPU</b> as two instanced draws instead of rasterized on the one thread a tab has.
+    A preview: the figure only, no panel and no journey yet. Needs a browser with WebGPU.</div>
 </footer>
 
 <!-- Umami, self-hosted on the same server: who opens a paper, and which one. No

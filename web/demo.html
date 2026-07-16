@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
 <title>E8 — an interactive paper</title>
 <meta name="description" content="Interactive scientific papers you can steer: the E8 root system, a 24-cell, a molecule, a star catalog." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307080c'/%3E%3Cg fill='%237fb2ff'%3E%3Ccircle cx='16' cy='6.5' r='2.2'/%3E%3Ccircle cx='22.7' cy='9.3' r='2.2'/%3E%3Ccircle cx='25.5' cy='16' r='2.2'/%3E%3Ccircle cx='22.7' cy='22.7' r='2.2'/%3E%3Ccircle cx='16' cy='25.5' r='2.2'/%3E%3Ccircle cx='9.3' cy='22.7' r='2.2'/%3E%3Ccircle cx='6.5' cy='16' r='2.2'/%3E%3Ccircle cx='9.3' cy='9.3' r='2.2'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='2.6' fill='%23f0e2aa'/%3E%3C/svg%3E" />
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; }
   canvas { display: block; width: 100vw; height: 100vh; touch-action: none; outline: none; }
@@ -12,9 +13,11 @@
   #load { position: fixed; inset: 0; display: grid; place-content: center; color: #8fa3c4; font: 15px system-ui, sans-serif; }
 
   /* The way in, for someone who arrived from a link: it goes on the first
-     interaction, because after that the guide strip the app draws says it all. */
+     interaction, because after that the guide strip the app draws says it all.
+     It floats ABOVE that strip — the app paints its own key line along the very
+     bottom of the canvas, and the two must not overlap. */
   #hint {
-    position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    position: fixed; left: 50%; bottom: calc(72px + env(safe-area-inset-bottom)); transform: translateX(-50%);
     color: #c6d0e0; background: rgba(10,12,20,.66); border: 1px solid rgba(120,140,180,.28);
     border-radius: 16px; padding: 9px 18px; font: 14px/1.4 system-ui, sans-serif;
     pointer-events: none; transition: opacity .6s ease; z-index: 3; text-align: center; max-width: 88vw;
@@ -39,10 +42,11 @@
   body.touch #touchbar { display: flex; }
   body.touch #hint { bottom: calc(74px + env(safe-area-inset-bottom)); }
 
-  /* Home, and the sources. Quiet, in the corner, out of the figure's way. */
+  /* Home, edit, and the sources. Quiet, in the top-right corner — the top-LEFT
+     belongs to the app's own status line, and nothing of ours may sit on it. */
   #top {
     position: fixed; left: 14px; right: 14px; top: calc(10px + env(safe-area-inset-top)); z-index: 3;
-    display: flex; justify-content: space-between; align-items: center; pointer-events: none;
+    display: flex; justify-content: flex-end; gap: 16px; align-items: center; pointer-events: none;
     font: 13px/1.5 system-ui, sans-serif; color: #8792a6;
   }
   #top a { pointer-events: auto; color: #9fb4d8; text-decoration: none; border-bottom: 1px solid rgba(159,180,216,.28); }
@@ -50,6 +54,14 @@
   #top .home { border: 1px solid rgba(120,140,180,.30); border-bottom-color: rgba(120,140,180,.30);
                background: rgba(10,12,20,.6); border-radius: 10px; padding: 7px 12px; }
   #src { display: flex; gap: 14px; align-items: center; }
+  /* The same drawer the touchbar's Edit opens — a mouse deserves a button too, not
+     just the O key. Hidden on touch, where the bar already carries it. */
+  #t-edit { pointer-events: auto; cursor: pointer; color: #9fb4d8; font: 13px/1.5 system-ui, sans-serif;
+            background: rgba(10,12,20,.6); border: 1px solid rgba(120,140,180,.30);
+            border-radius: 10px; padding: 7px 12px; }
+  #t-edit:hover { color: #dbe6f7; border-color: rgba(159,180,216,.6); }
+  body.touch #t-edit { display: none; }
+  body.editing #t-edit { color: #f0e2aa; border-color: rgba(240,226,170,.5); }
 
   /* The drop target only appears while something is over the page — a dashed rectangle
      sitting there permanently would be furniture in front of the figure. */
@@ -114,12 +126,15 @@
   .ed-check { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
   .ed-check input { width: 20px; height: 20px; }
   .ed-check label { margin: 0; text-transform: none; letter-spacing: 0; font-size: 14px; color: #dbe6f7; }
-  #ed-cam { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
-  #ed-cam button { min-height: 34px; padding: 0 11px; border-radius: 8px; font: 13px system-ui; color: #dbe6f7;
+  .ed-cam { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  .ed-cam button { min-height: 34px; padding: 0 11px; border-radius: 8px; font: 13px system-ui; color: #dbe6f7;
                    background: rgba(30,36,52,.9); border: 1px solid rgba(120,140,180,.3); }
-  #ed-cam .val { font: 12px ui-monospace, monospace; color: #93a1ba; }
+  .ed-cam .val { font: 12px ui-monospace, monospace; color: #93a1ba; }
+  .ed-cam button:disabled { opacity: .35; }
   #ed-del { margin-top: 22px; width: 100%; min-height: 40px; border-radius: 9px; font: 14px system-ui; color: #ffb4b4;
             background: rgba(50,20,24,.6); border: 1px solid rgba(200,90,90,.35); }
+  .ed-ghost { margin-top: 10px; width: 100%; min-height: 36px; border-radius: 9px; font: 13px system-ui;
+              color: #93a1ba; background: transparent; border: 1px dashed rgba(120,140,180,.3); }
   #ed-note { padding: 8px 14px; font-size: 13px; color: #f0c674; min-height: 20px; }
   #ed-note.bad { color: #ff9d9d; }
   body.editing #b-edit { background: rgba(60,70,96,.9); }
@@ -128,12 +143,13 @@
 <body>
 <canvas id="c" tabindex="0"></canvas>
 <div id="top">
-  <a class="home" href="./">‹ All demos</a>
   <span id="src">
     <a href="https://github.com/postadelmaga/E8" target="_blank" rel="noopener">E8</a>
     <a href="https://github.com/postadelmaga/Zengine" target="_blank" rel="noopener">Zengine</a>
     <a href="https://github.com/postadelmaga/Zrame" target="_blank" rel="noopener">Zrame</a>
   </span>
+  <button id="t-edit" title="Edit the deck (O)">Edit</button>
+  <a class="home" href="./">‹ All demos</a>
 </div>
 <div id="load">loading…</div>
 <div id="hint"></div>
@@ -191,10 +207,18 @@ if (asked && !DEMOS.includes(asked)) {
 }
 const demo = asked || "lisi";
 
+// The tab is named after the paper, not the framework — nine of these open side by
+// side while comparing, and "E8 — an interactive paper" nine times names none of them.
+const TITLES = { lisi: "E8 — Lisi's atlas", mtheory: "E10 — beyond E8", polytope: "The 24-cell",
+                 molecule: "Caffeine", chem: "Structure", astro: "Star catalog",
+                 graph: "Network", data: "Dataset", embed: "Embeddings" };
+document.title = `${TITLES[demo]} — an interactive paper`;
+
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d", { alpha: false });
 const errEl = document.getElementById("err");
 const loadEl = document.getElementById("load");
+loadEl.textContent = `loading ${TITLES[demo]}…`;
 const hint = document.getElementById("hint");
 const fail = (m) => { loadEl.style.display = "none"; errEl.style.display = "grid"; errEl.textContent = "E8 web error:\n" + m; };
 
@@ -207,7 +231,17 @@ hint.innerHTML = TOUCH
 
 let x, mem;
 try {
-  const { instance } = await WebAssembly.instantiateStreaming(fetch(`wasm/e8-${demo}.wasm`), { env: {} });
+  // Streaming first; if the server mislabels the MIME type (a plain file server
+  // often does), fall back to the buffered path instead of failing the page.
+  const url = `wasm/e8-${demo}.wasm`;
+  let instance;
+  try {
+    ({ instance } = await WebAssembly.instantiateStreaming(fetch(url), { env: {} }));
+  } catch {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+    ({ instance } = await WebAssembly.instantiate(await r.arrayBuffer(), { env: {} }));
+  }
   x = instance.exports; mem = x.memory;
   x.zicroBoot();
   loadEl.style.display = "none";
@@ -218,6 +252,17 @@ try {
 // paints. A phone reporting devicePixelRatio 3 would ask for ~7 M of them per frame
 // and get a slideshow; capping the ratio costs a little sharpness and buys the
 // interaction back. Desktops, which have the cores to spare, keep 2.
+//
+// A render scale below the device ratio was tried here and taken back out. It works
+// — the frame is very nearly linear in pixels (the E8 atlas: 153 ms at 1584×990,
+// 92 ms at half, 58 ms at a quarter) — but this canvas carries the HUD as well as
+// the figure, and the HUD is drawn at FIXED pixel sizes. Shrink the buffer and the
+// status line does not merely soften, it runs off the edge: the text keeps its 16 px
+// while the buffer it is measured against gets smaller. Scaling the scene alone
+// needs an upscaling blit on the Zig side (web.zig blits the scene 1:1 into the
+// window), and would only buy the geometry back — the measurements say the frame is
+// mostly NOT geometry: a 24-point scene costs 100 ms where a 240-point, 6720-edge
+// one costs 153 ms. The cost is per-pixel plumbing and one thread.
 const DPR_MAX = TOUCH ? 1.5 : 2;
 let dpr = 1;
 function resize() {
@@ -250,12 +295,22 @@ const KEY = { next: 25 /*P*/, prev: 14 /*Backspace*/, help: 35 /*H*/, full: 33 /
 const press = (code) => { used(); x.zicroKey(code, 1); x.zicroKey(code, 0); };
 
 canvas.addEventListener("keydown", (e) => {
+  // O opens the editor natively; here the native editor is compiled out
+  // (`native_only`), so the same key opens the page's own drawer instead.
+  if (e.code === "KeyO" && !e.repeat) { e.preventDefault(); used(); toggleEditor(); return; }
   const code = EVDEV[e.code];
   if (code === undefined) return;
   if (e.code !== "F5" && e.code !== "F12") e.preventDefault();
   used();
   x.zicroKey(code, 1);
 });
+// Esc, layered, like the native build: the drawer first — wherever focus is —
+// and only then the app's own layers (card, panel).
+addEventListener("keydown", (e) => {
+  if (e.code === "Escape" && document.body.classList.contains("editing")) {
+    e.preventDefault(); e.stopPropagation(); closeEditor();
+  }
+}, true);
 canvas.addEventListener("keyup", (e) => {
   const code = EVDEV[e.code];
   if (code !== undefined) x.zicroKey(code, 0);
@@ -274,7 +329,14 @@ const pts = new Map();              // live pointers, by id
 let pinchDist = 0;
 let down = null;                    // {x, y, t, moved} for the single-pointer gesture
 
-const pos = (e) => { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * dpr, (e.clientY - r.top) * dpr]; };
+// Derived from the canvas, not from `dpr`: the render scale moves under us, and a
+// pick that used a stale ratio would land on the wrong root — silently, which is
+// the worst way for a pick to be wrong.
+const pos = (e) => {
+  const r = canvas.getBoundingClientRect();
+  const sx = canvas.width / (r.width || 1), sy = canvas.height / (r.height || 1);
+  return [(e.clientX - r.left) * sx, (e.clientY - r.top) * sy];
+};
 const dist = () => {
   const [a, b] = [...pts.values()];
   return Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -645,7 +707,7 @@ function edRenderFields() {
   // image slide previews here exactly as it renders — no filesystem in sight.
   const imgWrap = document.createElement("div");
   const il = document.createElement("label"); il.textContent = "Picture (instead of the scene)"; imgWrap.appendChild(il);
-  const irow = document.createElement("div"); irow.id = "ed-cam";
+  const irow = document.createElement("div"); irow.className = "ed-cam";
   const pick = document.createElement("button"); pick.textContent = s.image ? "Replace…" : "Choose image…";
   const iclear = document.createElement("button"); iclear.textContent = "Clear";
   const iname = document.createElement("span"); iname.className = "val"; iname.textContent = s.image || "— the live scene";
@@ -656,7 +718,7 @@ function edRenderFields() {
   // camera capture
   const camWrap = document.createElement("div");
   const cl = document.createElement("label"); cl.textContent = "Camera"; camWrap.appendChild(cl);
-  const cam = document.createElement("div"); cam.id = "ed-cam";
+  const cam = document.createElement("div"); cam.className = "ed-cam";
   const use = document.createElement("button"); use.textContent = "Use current view";
   const clear = document.createElement("button"); clear.textContent = "Clear";
   const val = document.createElement("span"); val.className = "val";
@@ -676,14 +738,52 @@ function edRenderFields() {
   const tl = document.createElement("label"); tl.htmlFor = "ed-tumble"; tl.textContent = "Tumble (auto-rotate)";
   tw.append(cb, tl); b.appendChild(tw);
 
+  // Order and copies — a deck is an argument, and arguments get rearranged.
+  const ol = document.createElement("label"); ol.textContent = "This slide"; b.appendChild(ol);
+  const ops = document.createElement("div"); ops.className = "ed-cam";
+  const refresh = () => { edRenderTabs(); edRenderFields(); edLivePreview(); };
+  const mkOp = (label, disabled, fn) => {
+    const bt = document.createElement("button");
+    bt.textContent = label; bt.disabled = disabled; bt.onclick = fn;
+    return bt;
+  };
+  ops.append(
+    mkOp("◂ Move", edSel === 0, () => {
+      [edModel[edSel - 1], edModel[edSel]] = [edModel[edSel], edModel[edSel - 1]];
+      edSel -= 1; refresh();
+    }),
+    mkOp("Move ▸", edSel === edModel.length - 1, () => {
+      [edModel[edSel + 1], edModel[edSel]] = [edModel[edSel], edModel[edSel + 1]];
+      edSel += 1; refresh();
+    }),
+    mkOp("Duplicate", false, () => {
+      edModel.splice(edSel + 1, 0, structuredClone(edModel[edSel]));
+      edSel += 1; refresh();
+    }),
+  );
+  b.appendChild(ops);
+
   const del = document.createElement("button"); del.id = "ed-del"; del.textContent = "Delete this slide";
   del.onclick = () => {
     if (edModel.length <= 1) { edNote("a deck needs at least one slide", true); return; }
     edModel.splice(edSel, 1);
     edSel = Math.max(0, edSel - 1);
-    edRenderTabs(); edRenderFields(); edLivePreview();
+    refresh();
   };
   b.appendChild(del);
+
+  // A saved draft shadows the deck the demo ships — forever, if nothing offers the
+  // way back. This is the way back.
+  if (localStorage.getItem(LS_KEY)) {
+    const dd = document.createElement("button"); dd.className = "ed-ghost";
+    dd.textContent = "Discard saved draft — back to the built-in deck";
+    dd.onclick = () => {
+      localStorage.removeItem(LS_KEY);
+      localStorage.removeItem(LS_KEY + "-img");
+      location.reload();
+    };
+    b.appendChild(dd);
+  }
 }
 
 function openEditor() {
@@ -692,7 +792,7 @@ function openEditor() {
     edModel = parseDeck(draft || strAt(x.zicroDeckZon(), x.zicroDeckZonLen()));
     if (!edModel.length) edModel = [blankSlide()];
   }
-  edSel = 0;
+  edSel = Math.min(edSel, edModel.length - 1);   // reopen where the author left off
   document.body.classList.add("editing");
   document.getElementById("editor").setAttribute("aria-hidden", "false");
   edRenderTabs(); edRenderFields();
@@ -704,9 +804,11 @@ function closeEditor() {
   canvas.focus();
 }
 
-document.getElementById("b-edit").onclick = () => {
+function toggleEditor() {
   if (document.body.classList.contains("editing")) closeEditor(); else openEditor();
-};
+}
+document.getElementById("b-edit").onclick = toggleEditor;
+document.getElementById("t-edit").onclick = toggleEditor;
 document.getElementById("ed-close").onclick = closeEditor;
 document.getElementById("ed-save").onclick = () => {
   const zon = serializeDeck(edModel);
@@ -735,7 +837,8 @@ document.getElementById("ed-save").onclick = () => {
   const ptr = x.zicroDeckBuffer(bytes.length);
   if (!ptr) return;
   new Uint8Array(mem.buffer, ptr, bytes.length).set(bytes);
-  x.zicroApplyDeck(0);   // if it fails, the embedded deck stays — no harm
+  if (x.zicroApplyDeck(0) === 0)   // if it fails, the embedded deck stays — no harm
+    say("restored your saved draft — the editor can discard it");
 })();
 
 function frame(tMs) {

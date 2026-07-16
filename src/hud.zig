@@ -68,6 +68,15 @@ pub const Hud = struct {
     len1: usize = 0,
     line2: [200]u8 = undefined,
     len2: usize = 0,
+    /// A transient message ("exported…", "journey paused"), drawn as its own
+    /// centered pill and cleared by `tick` when its time is up. It used to be
+    /// pushed through `line2`, where it clobbered the selection detail and then
+    /// sat on screen forever.
+    toast_txt: [200]u8 = undefined,
+    toast_len: usize = 0,
+    /// Deadline in render-thread time; written by `toast`, read by `tick` —
+    /// both on the render thread, so it needs no lock.
+    toast_until: i128 = 0,
     legend: [10]LegendItem = undefined,
     n_legend: usize = 0,
     p_title: [96]u8 = undefined,
@@ -106,10 +115,29 @@ pub const Hud = struct {
 
     pub fn tick(self: *Hud, now_ns: i128) void {
         defer self.last_ns = now_ns;
+        if (self.toast_until != 0 and now_ns >= self.toast_until) {
+            self.toast_until = 0;
+            self.lock.lock();
+            self.toast_len = 0;
+            self.lock.unlock();
+            self.dirty();
+        }
         if (self.last_ns == 0) return;
         const dt_ms: f32 = @as(f32, @floatFromInt(now_ns - self.last_ns)) / 1.0e6;
         self.ema_ms = if (self.ema_ms == 0) dt_ms else self.ema_ms * 0.8 + dt_ms * 0.2;
         self.ms_bits.store(@bitCast(self.ema_ms), .monotonic);
+    }
+
+    /// Show `s` for `secs` seconds, then clear it. Render thread only (it
+    /// reads the clock `tick` keeps).
+    pub fn toast(self: *Hud, s: []const u8, secs: f32) void {
+        defer self.dirty();
+        self.toast_until = self.last_ns + @as(i128, @intFromFloat(secs * 1.0e9));
+        self.lock.lock();
+        defer self.lock.unlock();
+        const n = @min(s.len, self.toast_txt.len);
+        @memcpy(self.toast_txt[0..n], s[0..n]);
+        self.toast_len = n;
     }
 
     /// Every HUD write lands OUTSIDE the presented frame (status lines above it,
@@ -318,6 +346,7 @@ pub const Hud = struct {
         // Snapshot under the spinlock; skip a frame of detail rather than block.
         var l1: [256]u8 = undefined;
         var l2: [200]u8 = undefined;
+        var tt: [200]u8 = undefined;
         var leg: [10]LegendItem = undefined;
         var pt: [96]u8 = undefined;
         var pb: [panel_body_max]u8 = undefined;
@@ -325,6 +354,7 @@ pub const Hud = struct {
         var pf: [72]FigDot = undefined;
         var n1: usize = 0;
         var n2: usize = 0;
+        var ntt: usize = 0;
         var nl: usize = 0;
         var npt: usize = 0;
         var npb: usize = 0;
@@ -333,6 +363,7 @@ pub const Hud = struct {
         if (self.lock.tryLock()) {
             n1 = self.len1;
             n2 = self.len2;
+            ntt = self.toast_len;
             nl = self.n_legend;
             npt = self.p_title_len;
             npb = self.p_body_len;
@@ -340,6 +371,7 @@ pub const Hud = struct {
             npf = self.p_fig_len;
             @memcpy(l1[0..n1], self.line1[0..n1]);
             @memcpy(l2[0..n2], self.line2[0..n2]);
+            @memcpy(tt[0..ntt], self.toast_txt[0..ntt]);
             @memcpy(leg[0..nl], self.legend[0..nl]);
             @memcpy(pt[0..npt], self.p_title[0..npt]);
             @memcpy(pb[0..npb], self.p_body[0..npb]);
@@ -351,14 +383,18 @@ pub const Hud = struct {
         const x0: i32 = @intCast(content.x + 16);
         const base1: i32 = @intCast(content.y + 22);
         const base2: i32 = @intCast(content.y + 44);
-        const w_fps = font.measure(16, .bold, fps_str);
 
-        canvas.drawText(font, x0, base1, fps_str, .{
-            .size = 16,
-            .style = .bold,
-            .color = zrame.Color.rgba(120, 230, 160, 1.0),
-        });
-        if (n1 > 0) canvas.drawText(font, x0 + w_fps + 14, base1, l1[0..n1], .{
+        // No clock has ticked yet → "0 FPS" would be a lie; show nothing instead.
+        var l1_x = x0;
+        if (ms > 0.001) {
+            canvas.drawText(font, x0, base1, fps_str, .{
+                .size = 16,
+                .style = .bold,
+                .color = zrame.Color.rgba(120, 230, 160, 1.0),
+            });
+            l1_x += font.measure(16, .bold, fps_str) + 14;
+        }
+        if (n1 > 0) canvas.drawText(font, l1_x, base1, l1[0..n1], .{
             .size = 15,
             .style = .regular,
             .color = zrame.Color.rgba(200, 206, 214, 0.92),
@@ -368,6 +404,37 @@ pub const Hud = struct {
             .style = .regular,
             .color = zrame.Color.rgba(235, 220, 160, 0.95),
         });
+
+        // The toast: its own centered pill, so it neither fights the selection
+        // detail for `line2` nor outstays its welcome (`tick` clears it).
+        if (ntt > 0) {
+            const t = tt[0..ntt];
+            const tw = font.measure(15, .regular, t);
+            const tx = @as(i32, @intCast(content.x)) + @divTrunc(@as(i32, @intCast(content.w)) - tw, 2);
+            const ty: i32 = @intCast(content.y + 76);
+            canvas.fillRoundedRect(
+                @floatFromInt(tx - 16),
+                @floatFromInt(ty - 20),
+                @floatFromInt(tw + 32),
+                30,
+                15,
+                zrame.Color.rgba(10, 12, 20, 0.82),
+            );
+            canvas.strokeRoundedRect(
+                @floatFromInt(tx - 16),
+                @floatFromInt(ty - 20),
+                @floatFromInt(tw + 32),
+                30,
+                15,
+                1,
+                zrame.Color.rgba(120, 140, 180, 0.35),
+            );
+            canvas.drawText(font, tx, ty, t, .{
+                .size = 15,
+                .style = .regular,
+                .color = zrame.Color.rgba(240, 226, 170, 0.97),
+            });
+        }
 
         // Side panel: the glass band to the right of the centered video frame
         // (same centering math as chrome.frameOrigin).

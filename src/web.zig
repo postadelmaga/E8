@@ -338,6 +338,10 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
     if (!g_booted) return;
     const hud: *hud_mod.Hud = @ptrCast(@alignCast(user.?));
 
+    // The browser's rAF clock, so the FPS readout is real and timed toasts
+    // expire — main.zig does the same with the native clock.
+    hud.tick(@as(i128, zrame.widget.nowMs()) * 1_000_000);
+
     // The scene fills the content rect, minus the panel's gutter and the two HUD
     // bands — the same layout the native build computes from the window size.
     const rw = std.math.clamp(content.w -| 16 -| g_app.reserve_w, 320, 1920) / 4 * 4;

@@ -64,6 +64,9 @@ const Shared = struct {
     /// What the render thread wants to tell the author (saved / parse error).
     note: [128]u8 = undefined,
     nlen: usize = 0,
+    /// The note is an ERROR (parse failure, failed save) — drawn in the danger
+    /// color, not the dim gray informational notes get.
+    nbad: bool = false,
 
     fn lock(s: *Shared) void {
         while (s.held.swap(true, .acquire)) std.atomic.spinLoopHint();
@@ -71,10 +74,11 @@ const Shared = struct {
     fn unlock(s: *Shared) void {
         s.held.store(false, .release);
     }
-    fn setNote(s: *Shared, msg: []const u8) void {
+    fn setNote(s: *Shared, msg: []const u8, bad: bool) void {
         const n = @min(msg.len, s.note.len);
         @memcpy(s.note[0..n], msg[0..n]);
         s.nlen = n;
+        s.nbad = bad;
     }
 };
 
@@ -118,6 +122,10 @@ const Model = struct {
     touched: bool = false,
     saved_note: [128]u8 = undefined,
     saved_len: usize = 0,
+    saved_bad: bool = false,
+    /// Delete pressed once: the next press really removes the slide. Anything
+    /// else — selecting, adding, editing — puts the safety back on.
+    del_armed: bool = false,
 };
 
 // --- the option tables, straight from the domain -------------------------------------------
@@ -181,6 +189,9 @@ var g_presets: [][]const u8 = &.{};
 var g_colors: [][]const u8 = &.{};
 var g_filters: [][]const u8 = &.{};
 var g_edges: [][]const u8 = &.{};
+/// The window title names the deck being edited. Static: the title's bytes must
+/// outlive `Window.init`, and there is one editor window at a time.
+var g_title: [192:0]u8 = undefined;
 
 pub fn init(a: *App) void {
     g_presets = presetNames(a.gpa);
@@ -216,7 +227,7 @@ pub fn key(a: *App, code: u32) bool {
     st.shared.unlock();
     if (unsaved and !st.close_armed) {
         st.close_armed = true;
-        a.hud.setLine2("the editor has unsaved changes — save there, or press O again to close (a draft is kept)");
+        a.hud.toast("the editor has unsaved changes — save there, or press O again to close (a draft is kept)", 6);
         return true;
     }
     close(a);
@@ -259,11 +270,11 @@ pub fn post(a: *App) void {
         const path = slides.deckPath();
         std.Io.Dir.cwd().writeFile(a.io, .{ .sub_path = path, .data = sh.zon[0..sh.zlen] }) catch |e| {
             var buf: [128]u8 = undefined;
-            sh.setNote(std.fmt.bufPrint(&buf, "save failed: {s}", .{@errorName(e)}) catch "save failed");
+            sh.setNote(std.fmt.bufPrint(&buf, "save failed: {s}", .{@errorName(e)}) catch "save failed", true);
             return;
         };
         var buf: [128]u8 = undefined;
-        sh.setNote(std.fmt.bufPrint(&buf, "saved to {s}", .{path}) catch "saved");
+        sh.setNote(std.fmt.bufPrint(&buf, "saved to {s}", .{path}) catch "saved", false);
         sh.unsaved = false;
         st.close_armed = false;
     }
@@ -278,7 +289,7 @@ fn applyZon(a: *App, sh: *Shared) void {
 
     const d = deck_mod.parse(a.gpa, z) catch |e| {
         var buf: [128]u8 = undefined;
-        sh.setNote(std.fmt.bufPrint(&buf, "the deck will not parse: {s}", .{@errorName(e)}) catch "deck will not parse");
+        sh.setNote(std.fmt.bufPrint(&buf, "the deck will not parse: {s}", .{@errorName(e)}) catch "deck will not parse", true);
         return;
     };
     deck_mod.deinit(a.gpa, sl.deck);
@@ -288,7 +299,7 @@ fn applyZon(a: *App, sh: *Shared) void {
     sl.idx = @min(sh.sel, d.slides.len - 1);
     if (!a.pluginState(panel).on) panel.setOpen(a, true);
     slides.show(a, sl.idx);
-    sh.setNote("");
+    sh.setNote("", false);
 }
 
 // --- opening and closing the window ---------------------------------------------------------
@@ -321,7 +332,7 @@ fn open(a: *App) void {
     st.host = host;
 
     const w = zrame.Window.init(gpa, host.options(.{
-        .title = "editor",
+        .title = std.fmt.bufPrintZ(&g_title, "deck editor — {s}", .{slides.deckPath()}) catch "deck editor",
         .app_id = "dev.presenter.editor",
         .width = 560,
         .height = 760,
@@ -385,7 +396,7 @@ fn saveDraft(a: *App, st: *State) void {
         return;
     };
     var mbuf: [560]u8 = undefined;
-    a.hud.setLine2(std.fmt.bufPrint(&mbuf, "editor closed with unsaved changes — draft kept in {s}", .{path}) catch "editor draft kept");
+    a.hud.toast(std.fmt.bufPrint(&mbuf, "editor closed with unsaved changes — draft kept in {s}", .{path}) catch "editor draft kept", 8);
 }
 
 fn freeModel(m: *Model) void {
@@ -453,7 +464,7 @@ fn republish(m: *Model) void {
     sh.lock();
     defer sh.unlock();
     if (src.len > sh.zon.len) {
-        sh.setNote("the deck is too large to preview");
+        sh.setNote("the deck is too large to preview", true);
         return;
     }
     @memcpy(sh.zon[0..src.len], src);
@@ -479,6 +490,7 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
         if (ui.selectable(row, m.sel == i)) {
             m.sel = i;
             m.touched = true;
+            m.del_armed = false;
         }
         ui.popIdScope();
     }
@@ -495,12 +507,20 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
         m.slides.append(m.gpa, e) catch e.deinit(m.gpa);
         m.sel = m.slides.items.len -| 1;
         m.touched = true;
+        m.del_armed = false;
     }
-    if (m.slides.items.len > 0 and ui.button("delete")) {
-        var e = m.slides.orderedRemove(m.sel);
-        e.deinit(m.gpa);
-        m.sel = m.sel -| 1;
-        m.touched = true;
+    // Deleting a slide is the one edit with no way back, so it asks twice —
+    // the same arm-then-fire the close warning uses.
+    if (m.slides.items.len > 0) {
+        if (!m.del_armed) {
+            if (ui.button("delete")) m.del_armed = true;
+        } else if (ui.button("sure? delete")) {
+            var e = m.slides.orderedRemove(m.sel);
+            e.deinit(m.gpa);
+            m.sel = m.sel -| 1;
+            m.touched = true;
+            m.del_armed = false;
+        }
     }
     if (m.sel > 0 and ui.button("↑")) {
         std.mem.swap(EdSlide, &m.slides.items[m.sel], &m.slides.items[m.sel - 1]);
@@ -589,16 +609,27 @@ fn build(ui: *widget.Ui, user: ?*anyopaque) void {
     }
     ui.endRow();
 
-    // Whatever the render thread has to say — saved, or the deck would not parse.
+    // Whatever the render thread has to say — saved, or the deck would not
+    // parse — and whether there is anything to lose. Both live HERE, in the
+    // window the author is typing into, not on the scene's HUD behind it.
+    var note_unsaved = false;
     {
         const sh = m.shared;
         sh.lock();
         const n = sh.nlen;
         @memcpy(m.saved_note[0..n], sh.note[0..n]);
         m.saved_len = n;
+        m.saved_bad = sh.nbad;
+        note_unsaved = sh.unsaved;
         sh.unlock();
     }
-    if (m.saved_len > 0) ui.labelDim(m.saved_note[0..m.saved_len]);
+    if (note_unsaved) ui.textLine("unsaved changes — a draft is kept if the editor closes", 13, .regular, ui.theme.accent.withAlpha(0.9));
+    if (m.saved_len > 0) {
+        if (m.saved_bad)
+            ui.textLine(m.saved_note[0..m.saved_len], 13, .regular, ui.theme.danger)
+        else
+            ui.labelDim(m.saved_note[0..m.saved_len]);
+    }
 
     flush(m);
 }

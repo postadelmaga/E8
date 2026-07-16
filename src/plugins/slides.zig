@@ -73,9 +73,9 @@ fn applyStill(a: *App, path: []const u8) void {
     if (path.len == 0) return;
     st.still = still_mod.load(a.gpa, a.io, path) catch |e| {
         var buf: [160]u8 = undefined;
-        a.hud.setLine2(std.fmt.bufPrint(&buf, "the slide's picture will not open ({s}: {s})", .{
+        a.hud.toast(std.fmt.bufPrint(&buf, "the slide's picture will not open ({s}: {s})", .{
             path, @errorName(e),
-        }) catch "the slide's picture will not open");
+        }) catch "the slide's picture will not open", 8);
         return;
     };
     a.still = &st.still.?;
@@ -88,9 +88,9 @@ fn applyData(a: *App, path: []const u8) void {
     if (comptime !@hasDecl(D, "load")) return; // this domain computes its points
     a.reloadPoints(path) catch |e| {
         var buf: [160]u8 = undefined;
-        a.hud.setLine2(std.fmt.bufPrint(&buf, "the slide's data will not open ({s}: {s})", .{
+        a.hud.toast(std.fmt.bufPrint(&buf, "the slide's data will not open ({s}: {s})", .{
             path, @errorName(e),
-        }) catch "the slide's data will not open");
+        }) catch "the slide's data will not open", 8);
     };
 }
 
@@ -136,9 +136,9 @@ pub fn key(a: *App, code: u32) bool {
                 // The author just edited this file: a silent revert to the
                 // embedded deck reads as "my edit was ignored".
                 var buf: [160]u8 = undefined;
-                a.hud.setLine2(std.fmt.bufPrint(&buf, "{s} will not parse ({s}) — playing the embedded deck", .{
+                a.hud.toast(std.fmt.bufPrint(&buf, "{s} will not parse ({s}) — playing the embedded deck", .{
                     deckPath(), @errorName(e),
-                }) catch "deck.zon will not parse — playing the embedded deck");
+                }) catch "deck.zon will not parse — playing the embedded deck", 8);
             } else if (a.pluginState(panel).on and st.deck.slides.len > 0) show(a, st.idx);
             return true;
         },
@@ -147,7 +147,8 @@ pub fn key(a: *App, code: u32) bool {
             if (a.pluginState(panel).on) {
                 panel.setOpen(a, false);
                 st.auto = false;
-                a.hud.setLine2("journey paused — P resumes where you left off");
+                a.hud.toast("journey paused — P resumes where you left off", 5);
+                a.info_dirty = true; // hand line2 back to the selection detail
                 a.status_dirty = true;
                 return true;
             }

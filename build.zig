@@ -305,9 +305,12 @@ pub fn build(b: *std.Build) void {
     // rasterizer is tuned. Zengine's `ze_wgpu.MeshPresent` (its issue #88) hands the
     // whole figure to the GPU as two instanced draws.
     //
-    // Wired BY HAND, like Zengine's own web build: `b.dependency(...)` would drag the
-    // engine's native halves (Vulkan, meshoptimizer, ufbx) at an emscripten target that
-    // cannot have them. Modules are made from the deps' source paths instead.
+    // The seam arrives from the PACKAGE (Zengine issue #89): `ze_wgpu_web` and
+    // `zicro_wgpu_web` are published modules, fully wired — zicro's webgpu.h binding
+    // built from Zengine's own zicro (no second zicro to collide with), the
+    // emdawnwebgpu include path, and every shader `rhi_wgpu.zig` @embedFiles already
+    // compiled (glslc) and transpiled (naga) inside the dependency. This block used to
+    // rebuild all of that by hand; what is left is E8's own modules and the emcc link.
     {
         const emcc = b.findProgram(&.{"emcc"}, &.{}) catch null;
         const gpu_step = b.step("web-gpu", "Build the GPU (WebGPU) web build into zig-out/web/gpu");
@@ -318,8 +321,6 @@ pub fn build(b: *std.Build) void {
             // the emdawnwebgpu port drops in the emsdk cache.
             const emsdk = std.fs.path.dirname(emcc_path).?;
             const sysroot = b.pathJoin(&.{ emsdk, "cache", "sysroot", "include" });
-            const dawn_include = b.option([]const u8, "dawn-include", "Dawn's webgpu.h directory (default: the emsdk cache)") orelse
-                b.pathJoin(&.{ emsdk, "cache", "ports", "emdawnwebgpu", "emdawnwebgpu_pkg", "webgpu", "include" });
 
             const Em = struct {
                 b: *std.Build,
@@ -340,82 +341,14 @@ pub fn build(b: *std.Build) void {
             };
             const em = Em{ .b = b, .target = em_target, .sysroot = sysroot };
 
-            // Hand-made from the deps' source paths, NOT `b.dependency(...).module(...)`,
-            // and both halves of that are forced:
-            //
-            //  · zicro's published `zicro_wgpu` links wgpu-native — the DESKTOP device.
-            //    A browser implements webgpu.h itself (emcc's Dawn port does), so the
-            //    published module is the wrong one here and drags a native library a
-            //    wasm cannot link.
-            //  · so the module has to be made here — and then it must be the ONLY one.
-            //    Taking `ze_wgpu` from the dependency brings that module's own zicro
-            //    along, and Zig will not put one file in two modules ("file exists in
-            //    modules 'zicro_wgpu' and 'zicro_wgpu0'"), which is the collision
-            //    `ze_wgpu.zig`'s header warns about.
-            //
-            // Zengine's own web build does exactly this for exactly this reason.
-            const zw = em.make(zicro_dep.builder.path("src/gpu_wgpu.zig"));
-            zw.addIncludePath(.{ .cwd_relative = dawn_include });
-            const ze_rhi = em.make(zb.path("src/gpu/rhi.zig")); // std only
-            const ze_wgpu = em.make(zb.path("src/ze_wgpu.zig"));
-            ze_wgpu.addImport("ze_rhi", ze_rhi);
-            ze_wgpu.addImport("zicro_wgpu", zw);
-
-            // …and the price of hand-wiring: `rhi_wgpu.zig` @embedFiles the WGSL for
-            // its own pipelines, so the consumer has to produce it. GLSL → SPIR-V
-            // (unoptimised: glslc's -O folds constants naga then rejects) → WGSL, the
-            // only form a browser takes. The defines are the push-constant-free variant
-            // WebGPU needs.
-            // The bloom four come along even though this build asks for glow = 0: the
-            // composite is behind a runtime `if`, but @embedFile is comptime, so the
-            // function is analysed and its shaders must exist regardless.
-            const inst_shaders = .{
-                .{ .stage = "vertex", .src = "src/gpu/mesh3d_inst.vert", .import = "mesh3d_inst_vert_spv", .gles = true },
-                .{ .stage = "fragment", .src = "src/gpu/mesh3d_inst.frag", .import = "mesh3d_inst_frag_spv", .gles = true },
-                .{ .stage = "vertex", .src = "src/gpu/bloom_fullscreen.vert", .import = "bloom_vert_spv", .gles = false },
-                .{ .stage = "fragment", .src = "src/gpu/bloom_bright.frag", .import = "bloom_bright_spv", .gles = false },
-                .{ .stage = "fragment", .src = "src/gpu/bloom_blur.frag", .import = "bloom_blur_spv", .gles = false },
-                .{ .stage = "fragment", .src = "src/gpu/bloom_composite.frag", .import = "bloom_composite_spv", .gles = false },
-            };
-            inline for (inst_shaders) |s| {
-                const glslc = b.addSystemCommand(&.{"glslc"});
-                glslc.addArg("-fshader-stage=" ++ s.stage);
-                glslc.addArg("-O0");
-                glslc.addArg("--target-env=vulkan1.1");
-                glslc.addArg("-DZE_PUSH_UNIFORM");
-                glslc.addArg("-DZE_SPLIT_SAMPLERS");
-                glslc.addFileArg(zb.path(s.src));
-                glslc.addArg("-o");
-                const spv = glslc.addOutputFileArg(s.import ++ ".spv");
-
-                const naga = b.addSystemCommand(&.{"naga"});
-                naga.addFileArg(spv);
-                const wgsl = naga.addOutputFileArg(s.import ++ ".wgsl");
-                ze_wgpu.addAnonymousImport(s.import ++ "_wgsl", .{ .root_source_file = wgsl });
-
-                // The same SPIR-V again, as GLSL ES 300, for the WebGL2 twin
-                // (`gles_mesh.zig`, issue #88 follow-up 3) — which @embedFiles it exactly
-                // as `rhi_wgpu.zig` @embedFiles the WGSL, so the consumer owes it too.
-                //
-                // WITHOUT --keep-coordinate-space, and that is the whole trick: this path
-                // is one pass straight onto framebuffer 0, so naga's standard adjustment
-                // (y-flip + z from [0,w] to [-w,w]) is exactly what the canvas wants —
-                // which is why `viewProj` can stay WebGPU clip space and feed BOTH.
-                //
-                // The extension is load-bearing: naga picks its output format from it,
-                // and answers an unknown one by printing a line and exiting ZERO — so
-                // `.glsl` here produces no file and no error, and the build only trips
-                // later on a missing @embedFile. Hence .vert/.frag, per stage.
-                // Only the instanced pair has a twin to feed: `gles_mesh.zig` embeds
-                // these two and nothing else (the bloom chain is WebGPU-only, which is
-                // exactly why this build asks for glow = 0 — see scene_gpu.zig).
-                if (s.gles) {
-                    const naga_gl = b.addSystemCommand(&.{ "naga", "--profile", "es300" });
-                    naga_gl.addFileArg(spv);
-                    const gles = naga_gl.addOutputFileArg(s.import ++ (if (std.mem.eql(u8, s.stage, "vertex")) ".vert" else ".frag"));
-                    ze_wgpu.addAnonymousImport(s.import ++ "_gles", .{ .root_source_file = gles });
-                }
-            }
+            // The seam, from the package. Everything the cut-out hand-wiring used to
+            // build — zicro_wgpu from source with Dawn's include, ze_rhi, ze_wgpu, six
+            // shaders through glslc + naga (WGSL and the es300 pair for the WebGL2
+            // twin) — now arrives as two published modules. See `ze_wgpu.zig`'s header
+            // in Zengine for the whole recipe, including why the wasm root must own
+            // its logFn and panic (web.zig already does).
+            const zw = zengine_dep.module("zicro_wgpu_web");
+            const ze_wgpu = zengine_dep.module("ze_wgpu_web");
 
             // The scene's GPU rasterizer — the module `web.zig` names `scene_gpu`.
             const scene_gpu = em.make(b.path("src/scene_gpu.zig"));

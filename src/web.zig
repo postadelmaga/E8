@@ -589,6 +589,12 @@ var g_last_status: f32 = 0;
 /// the same colours the plugins just chose. This reads `g_app.visuals` and `edgePairs`,
 /// exactly as the software rasterizer does two screens down; that is the whole point of
 /// there being one `draw` and not two. Nothing here decides anything about E8.
+/// The emissive weights the atlas was drawn at. 6720 edges each glowing at full weight
+/// is not a brighter figure, it is a white one — the edges are a mesh, and their glow
+/// adds up along every line of sight.
+const root_glow: f32 = 0.75;
+const edge_glow: f32 = 0.25;
+
 fn gpuScene(eye: [3]f32, rw: u32, rh: u32, ox: f32, oy: f32, n_pts: usize, pairs: []const [2]u16) void {
     // The canvas follows the same slot the software build blits into, so the panel keeps
     // its gutter and the figure sits where it always sat. JS reads this and moves the
@@ -610,10 +616,12 @@ fn gpuScene(eye: [3]f32, rw: u32, rh: u32, ox: f32, oy: f32, n_pts: usize, pairs
         if (!g_app.vis[i]) continue;
         if (n == g_insts.len) break;
         const v = &g_app.visuals[i];
-        // Alpha is the seam's EMISSIVE weight, so a root the plugins made bright glows
-        // instead of merely being pale.
+        // Alpha is the seam's EMISSIVE weight — NOT an opacity, and not `bright` either.
+        // `bright` is the software rasterizer's own gain and runs past 1; fed in raw it
+        // drives the emissive to saturation and the atlas comes out white. Scale it to
+        // the weight the figure was drawn at, and a bright root still glows more.
         g_insts[n] = scene.Instance.at(g_app.p3[i], point_radius * v.radius, .{
-            v.color[0], v.color[1], v.color[2], std.math.clamp(v.bright, 0.0, 1.0),
+            v.color[0], v.color[1], v.color[2], std.math.clamp(v.bright, 0.0, 1.0) * root_glow,
         });
         n += 1;
     }
@@ -631,7 +639,7 @@ fn gpuScene(eye: [3]f32, rw: u32, rh: u32, ox: f32, oy: f32, n_pts: usize, pairs
         const len = @sqrt(dot3(d, d));
         if (len < 1e-6) continue;
         g_insts[n] = scene.Instance.along(p, d, 0.006, len, .{
-            ev.color[0], ev.color[1], ev.color[2], std.math.clamp(ev.k, 0.0, 1.0),
+            ev.color[0], ev.color[1], ev.color[2], std.math.clamp(ev.k, 0.0, 1.0) * edge_glow,
         });
         n += 1;
     }

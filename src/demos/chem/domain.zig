@@ -72,6 +72,35 @@ var n_chains: usize = 0;
 var bonds: [][2]u16 = &.{};
 /// The measuring mark (M), and the last measurement, for the HUD.
 var mark: i32 = -1;
+
+/// How the atoms are drawn. One structure does not have one right answer: a
+/// ligand wants its atoms, a fold wants its trace, a binding site wants its
+/// surface — so this is a key (B), not a decision taken for the reader.
+const Rep = enum {
+    /// Spheres at a fraction of vdW, bonds visible between them.
+    ball_stick,
+    /// Full van der Waals: the shape the molecule presents to the world.
+    spacefill,
+    /// The atoms recede to joints and the bonds carry the picture — the only
+    /// representation in which a thousand-atom protein reads as a fold.
+    sticks,
+
+    fn scale(r: Rep) f32 {
+        return switch (r) {
+            .ball_stick => 1.0,
+            .spacefill => 2.6,
+            .sticks => 0.34,
+        };
+    }
+    fn label(r: Rep) []const u8 {
+        return switch (r) {
+            .ball_stick => "ball-and-stick",
+            .spacefill => "spacefill (van der Waals)",
+            .sticks => "sticks",
+        };
+    }
+};
+var rep: Rep = .ball_stick;
 var bfac_lo: f32 = 0;
 var bfac_hi: f32 = 1;
 var n_residues: usize = 0;
@@ -461,16 +490,28 @@ fn actMark(a: *App) void {
     a.status_dirty = true;
 }
 
+fn actRep(a: *App) void {
+    rep = switch (rep) {
+        .ball_stick => .spacefill,
+        .spacefill => .sticks,
+        .sticks => .ball_stick,
+    };
+    a.hud.toast(rep.label(), 2.5);
+    a.status_dirty = true;
+}
+
 pub const actions = &[_]app_mod.ActionDef{
     .{ .key = keys.domain_m, .help = "M: mark this atom (then select another to measure the distance)", .run = actMark },
+    .{ .key = keys.domain_b, .help = "B: how the atoms are drawn — ball-and-stick, spacefill, sticks", .run = actRep },
 };
 
 pub fn status(a: *App, buf: []u8) []const u8 {
     _ = a;
-    if (mark < 0) return "";
+    if (mark < 0) return rep.label();
     const i: usize = @intCast(mark);
     var nb: [8]u8 = undefined;
-    return std.fmt.bufPrint(buf, "mark: {s}{d}", .{
+    return std.fmt.bufPrint(buf, "{s} · mark: {s}{d}", .{
+        rep.label(),
         atomName(i, &nb),
         atoms[i].res_seq,
     }) catch "mark";
@@ -499,11 +540,12 @@ pub fn descriptor(a: *App, i: usize) desc.Object {
     const p = &a.points[i];
     var d = desc.Object{
         .orbit_rgb = p.el.cpk(),
-        .radius = switch (p.el) {
-            .h => 0.55,
-            .c, .n, .o => 0.9,
-            else => 1.15,
-        },
+        // Ball-and-stick: the spheres are the van der Waals radii, shrunk to a
+        // fraction so the bonds stay visible between them — the convention every
+        // viewer uses. Carbon is the yardstick (r = 1), which keeps the whole
+        // scene the size the three hand-picked buckets used to make it while the
+        // atoms inside it finally hold their real proportions.
+        .radius = rep.scale() * p.el.vdwRadius() / read.Element.c.vdwRadius(),
     };
     // The mark breathes: you always know where your ruler's other end is.
     if (mark >= 0 and i == @as(usize, @intCast(mark))) {

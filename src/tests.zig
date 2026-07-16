@@ -11,4 +11,5 @@ test {
     _ = @import("demos/mtheory/e10.zig");
     _ = @import("demos/mtheory/calabi.zig");
     _ = @import("demos/mtheory/heterotic.zig");
+    _ = @import("demos/chem/read.zig");
 }

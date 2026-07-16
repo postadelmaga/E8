@@ -74,6 +74,33 @@ pub const Element = enum(u8) {
         };
     }
 
+    /// Van der Waals radius in Å (Bondi 1964, Mantina 2009 for the metals) —
+    /// how big the atom LOOKS. Bonds come from `covalentRadius`; this is the
+    /// other radius, and drawing spheres with the covalent one (or with three
+    /// hand-picked buckets) makes sulphur the size of oxygen and iron the size
+    /// of carbon, which is exactly what a chemist reads a CPK model to avoid.
+    pub fn vdwRadius(e: Element) f32 {
+        return switch (e) {
+            .h => 1.10,
+            .c => 1.70,
+            .n => 1.55,
+            .o => 1.52,
+            .s => 1.80,
+            .p => 1.80,
+            .f => 1.47,
+            .cl => 1.75,
+            .br => 1.85,
+            .i => 1.98,
+            .fe => 2.04,
+            .zn => 2.10,
+            .mg => 1.73,
+            .ca => 2.31,
+            .na => 2.27,
+            .k => 2.75,
+            .other => 1.80,
+        };
+    }
+
     /// CPK/Jmol colors — the palette every chemist reads without a legend.
     pub fn cpk(e: Element) [3]f32 {
         return switch (e) {
@@ -294,28 +321,240 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io, path: []const u8, max_atoms: usi
     return s;
 }
 
-/// Bonds from covalent radii: two atoms are bonded when they sit closer than
-/// r₁ + r₂ + 0.4 Å — the tolerance every viewer uses, and the reason a structure
-/// with no CONECT records still comes up as a molecule.
-pub fn inferBonds(gpa: std.mem.Allocator, atoms: []const Atom) ![][2]u16 {
+/// The widest a bond can be: the two largest covalent radii plus the tolerance.
+/// It sizes the grid cell below, so no bond can span more than one cell.
+const max_bond_cut: f32 = 2.03 + 2.03 + 0.4; // K + K + 0.4 Å
+
+/// True when atoms `a` and `b` are bonded — the whole chemistry of the inference,
+/// in one place so the grid below cannot disagree with the rule it accelerates.
+fn bonded(a: Atom, b: Atom) bool {
+    // Two hydrogens never bond to each other; a pair closer than 0.4 Å is
+    // a modeling error, not a bond.
+    if (a.el == .h and b.el == .h) return false;
+    const cut = a.el.covalentRadius() + b.el.covalentRadius() + 0.4;
+    var d2: f32 = 0;
+    for (0..3) |k| {
+        const t = a.pos[k] - b.pos[k];
+        d2 += t * t;
+    }
+    return d2 <= cut * cut and d2 >= 0.16;
+}
+
+/// The rule, applied the slow and obvious way: every pair, once. It is the
+/// definition `inferBonds` accelerates — kept because a cloud too sparse to bin
+/// falls back to it, and because a test holds the grid to its answer.
+fn inferBondsBrute(gpa: std.mem.Allocator, atoms: []const Atom) ![][2]u16 {
     var out: std.ArrayList([2]u16) = .empty;
     errdefer out.deinit(gpa);
     for (atoms, 0..) |a, i| {
-        const ra = a.el.covalentRadius();
         for (atoms[i + 1 ..], i + 1..) |b, j| {
-            const rb = b.el.covalentRadius();
-            const cut = ra + rb + 0.4;
-            var d2: f32 = 0;
-            for (0..3) |k| {
-                const t = a.pos[k] - b.pos[k];
-                d2 += t * t;
-            }
-            // Two hydrogens never bond to each other; a pair closer than 0.4 Å is
-            // a modeling error, not a bond.
-            if (d2 > cut * cut or d2 < 0.16) continue;
-            if (a.el == .h and b.el == .h) continue;
-            try out.append(gpa, .{ @intCast(i), @intCast(j) });
+            if (bonded(a, b)) try out.append(gpa, .{ @intCast(i), @intCast(j) });
         }
     }
     return out.toOwnedSlice(gpa);
+}
+
+/// Bonds from covalent radii: two atoms are bonded when they sit closer than
+/// r₁ + r₂ + 0.4 Å — the tolerance every viewer uses, and the reason a structure
+/// with no CONECT records still comes up as a molecule.
+///
+/// Every pair used to be tested against every other, which is 200 million tests
+/// at the 20 000-atom cap and a load that visibly stops — for a rule that can
+/// never reach further than `max_bond_cut`. Binning the atoms into cells that
+/// wide means a bond can only join atoms in the same cell or a touching one, so
+/// each atom looks at its 27 cells and the work falls to O(n): a protein opens
+/// as fast as it parses. It returns the brute force's own list — the same pairs,
+/// pair for pair, in the same order — and a test holds it to that.
+pub fn inferBonds(gpa: std.mem.Allocator, atoms: []const Atom) ![][2]u16 {
+    var out: std.ArrayList([2]u16) = .empty;
+    errdefer out.deinit(gpa);
+    if (atoms.len == 0) return out.toOwnedSlice(gpa);
+
+    // The bounding box, in cells of `max_bond_cut`.
+    var lo = [3]f32{ atoms[0].pos[0], atoms[0].pos[1], atoms[0].pos[2] };
+    var hi = lo;
+    for (atoms) |a| {
+        for (0..3) |k| {
+            if (!std.math.isFinite(a.pos[k])) return inferBondsBrute(gpa, atoms);
+            lo[k] = @min(lo[k], a.pos[k]);
+            hi[k] = @max(hi[k], a.pos[k]);
+        }
+    }
+    // A grid pays only when the atoms are packed the way matter is. Two atoms a
+    // kilometre apart would ask for a hundred million empty cells — so measure
+    // the grid first and hand a cloud that shape to the loop it was written for.
+    var n_cells: usize = 1;
+    var dim: [3]usize = undefined;
+    const cell_cap = atoms.len * 8 + 1024;
+    for (0..3) |k| {
+        const span = (hi[k] - lo[k]) / max_bond_cut;
+        if (!(span < @as(f32, @floatFromInt(cell_cap)))) return inferBondsBrute(gpa, atoms);
+        dim[k] = @max(1, @as(usize, @intFromFloat(@floor(span))) + 1);
+        n_cells = std.math.mul(usize, n_cells, dim[k]) catch return inferBondsBrute(gpa, atoms);
+        if (n_cells > cell_cap) return inferBondsBrute(gpa, atoms);
+    }
+
+    const cellOf = struct {
+        fn f(pos: [3]f32, o: [3]f32, d: [3]usize) [3]usize {
+            var c: [3]usize = undefined;
+            for (0..3) |k| {
+                const t = @floor((pos[k] - o[k]) / max_bond_cut);
+                c[k] = @min(d[k] - 1, @as(usize, @intFromFloat(@max(t, 0))));
+            }
+            return c;
+        }
+    }.f;
+
+    // Counting sort the atoms into the cells: `start[c]` where cell c's atoms
+    // begin in `items`. Two passes, no per-cell allocation.
+    const start = try gpa.alloc(u32, n_cells + 1);
+    defer gpa.free(start);
+    @memset(start, 0);
+    for (atoms) |a| {
+        const c = cellOf(a.pos, lo, dim);
+        start[(c[2] * dim[1] + c[1]) * dim[0] + c[0] + 1] += 1;
+    }
+    for (1..start.len) |i| start[i] += start[i - 1];
+
+    const items = try gpa.alloc(u16, atoms.len);
+    defer gpa.free(items);
+    {
+        const fill = try gpa.alloc(u32, n_cells);
+        defer gpa.free(fill);
+        @memcpy(fill, start[0..n_cells]);
+        for (atoms, 0..) |a, i| {
+            const c = cellOf(a.pos, lo, dim);
+            const ci = (c[2] * dim[1] + c[1]) * dim[0] + c[0];
+            items[fill[ci]] = @intCast(i);
+            fill[ci] += 1;
+        }
+    }
+
+    // Each atom against its own cell and the 26 around it. The pair is kept only
+    // when i < j, so it is emitted once and the halves need no bookkeeping.
+    //
+    // The cells hand back neighbours in cell order, not in atom order, so each
+    // atom's partners are sorted before they are emitted: the pairs then leave
+    // here exactly as the all-against-all loop left them, and everything reading
+    // this list — the CSV, `bondedPartner`'s "first neighbour" — is unmoved.
+    //
+    // The buffer grows rather than capping: chemistry bounds a real degree at a
+    // handful, but a garbage file is not chemistry, and a cap would silently
+    // drop the pairs past it — turning this from an optimization into a
+    // different answer, which is the one thing it may not be.
+    var mine: std.ArrayList(u16) = .empty;
+    defer mine.deinit(gpa);
+    for (atoms, 0..) |a, i| {
+        mine.clearRetainingCapacity();
+        const c = cellOf(a.pos, lo, dim);
+        // The touching cells, clamped to the grid: `c[k] -| 1` is a saturating
+        // subtract, so cell 0's neighbourhood simply starts at 0.
+        var z = c[2] -| 1;
+        while (z <= @min(c[2] + 1, dim[2] - 1)) : (z += 1) {
+            var y = c[1] -| 1;
+            while (y <= @min(c[1] + 1, dim[1] - 1)) : (y += 1) {
+                var x = c[0] -| 1;
+                while (x <= @min(c[0] + 1, dim[0] - 1)) : (x += 1) {
+                    const ci = (z * dim[1] + y) * dim[0] + x;
+                    for (items[start[ci]..start[ci + 1]]) |j| {
+                        if (j <= i) continue;
+                        if (bonded(a, atoms[j])) try mine.append(gpa, j);
+                    }
+                }
+            }
+        }
+        std.mem.sort(u16, mine.items, {}, std.sort.asc(u16));
+        for (mine.items) |j| try out.append(gpa, .{ @intCast(i), j });
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+// --- tests -------------------------------------------------------------------------------------
+
+// A pseudo-random cloud, dense enough that atoms really do bond: the grid must
+// return the brute-force list, pair for pair and in the same order. This is the
+// whole warrant for the grid — it is an optimization, and an optimization that
+// changes the answer is a bug with better timings.
+test "inferBonds: the grid agrees with all-against-all" {
+    const gpa = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    const rnd = prng.random();
+    const els = [_]Element{ .c, .n, .o, .h, .s, .fe, .k };
+
+    for ([_]usize{ 0, 1, 2, 37, 400 }) |n| {
+        const atoms = try gpa.alloc(Atom, n);
+        defer gpa.free(atoms);
+        for (atoms) |*a| {
+            a.* = .{
+                // A 14 Å box: several grid cells across, and packed tightly
+                // enough that most atoms have neighbours in a touching cell.
+                .pos = .{
+                    rnd.float(f32) * 14.0,
+                    rnd.float(f32) * 14.0,
+                    rnd.float(f32) * 14.0,
+                },
+                .el = els[rnd.uintLessThan(usize, els.len)],
+            };
+        }
+        const fast = try inferBonds(gpa, atoms);
+        defer gpa.free(fast);
+        const slow = try inferBondsBrute(gpa, atoms);
+        defer gpa.free(slow);
+        try std.testing.expectEqualSlices([2]u16, slow, fast);
+    }
+}
+
+// Degenerate geometry the grid has to survive: every atom on one point (one
+// cell, and no bonds at all — coincident atoms are a modeling error, not a
+// bond), and a line long enough to need many cells along one axis only.
+test "inferBonds: coincident and collinear atoms" {
+    const gpa = std.testing.allocator;
+
+    var same: [16]Atom = undefined;
+    for (&same) |*a| a.* = .{ .pos = .{ 1, 2, 3 }, .el = .c };
+    const none = try inferBonds(gpa, &same);
+    defer gpa.free(none);
+    try std.testing.expectEqual(@as(usize, 0), none.len);
+
+    // A carbon chain at 1.5 Å: each atom bonds to the next and to nothing else
+    // (1.5 < 1.92 = the C–C cutoff; 3.0 > 1.92).
+    var chain: [64]Atom = undefined;
+    for (&chain, 0..) |*a, i| a.* = .{ .pos = .{ @as(f32, @floatFromInt(i)) * 1.5, 0, 0 }, .el = .c };
+    const bonds = try inferBonds(gpa, &chain);
+    defer gpa.free(bonds);
+    try std.testing.expectEqual(@as(usize, chain.len - 1), bonds.len);
+    for (bonds, 0..) |b, i| try std.testing.expectEqual([2]u16{ @intCast(i), @intCast(i + 1) }, b);
+}
+
+// The escape hatch: a cloud so sparse that binning it would ask for more cells
+// than there is memory. It must still answer, and answer the same thing.
+test "inferBonds: a cloud too sparse to bin still gets its bonds" {
+    const gpa = std.testing.allocator;
+    // Two tight pairs, a kilometre apart: 1e3 Å / 4.46 Å is far past the cell
+    // cap for four atoms, so this takes the fallback — and the two bonds are
+    // still found.
+    const atoms = [_]Atom{
+        .{ .pos = .{ 0, 0, 0 }, .el = .c },
+        .{ .pos = .{ 1.5, 0, 0 }, .el = .c },
+        .{ .pos = .{ 100_000, 0, 0 }, .el = .c },
+        .{ .pos = .{ 100_001.5, 0, 0 }, .el = .c },
+    };
+    const bonds = try inferBonds(gpa, &atoms);
+    defer gpa.free(bonds);
+    try std.testing.expectEqualSlices([2]u16, &.{ .{ 0, 1 }, .{ 2, 3 } }, bonds);
+}
+
+// A coordinate that is not a number reaches the reader from real files. It must
+// not become a grid index.
+test "inferBonds: a NaN coordinate does not crash the grid" {
+    const gpa = std.testing.allocator;
+    const nan = std.math.nan(f32);
+    const atoms = [_]Atom{
+        .{ .pos = .{ 0, 0, 0 }, .el = .c },
+        .{ .pos = .{ 1.5, 0, 0 }, .el = .c },
+        .{ .pos = .{ nan, nan, nan }, .el = .c },
+    };
+    const bonds = try inferBonds(gpa, &atoms);
+    defer gpa.free(bonds);
+    try std.testing.expectEqualSlices([2]u16, &.{.{ 0, 1 }}, bonds);
 }

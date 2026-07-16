@@ -39,8 +39,13 @@ pub const Point = struct {
     /// Color index (BP−RP or B−V). NaN when the catalog has none.
     color_idx: f32 = 0,
     teff: f32 = 0,
-    /// Apparent flux relative to a 6th-magnitude star, clamped — what sizes the
-    /// dot and drives the glow. Resolved once here; descriptor() runs per frame.
+    /// How big and how hard this star burns, relative to a 6th-magnitude one:
+    /// the SQUARE ROOT of its apparent flux, 10^((6−m)/5), clamped. The root is
+    /// the point — the dot is a disc, its area goes as the radius squared, so a
+    /// radius scaled by √flux is what makes the light a star puts on the screen
+    /// track the light it actually sends. (Flux itself is 10^((6−m)/2.5); this
+    /// is not that, and sizing a disc by it would make Sirius a blot.)
+    /// Resolved once here; descriptor() runs per frame.
     flux: f32 = 1,
     row: u32 = 0,
 };
@@ -80,23 +85,60 @@ var pc_per_unit: f32 = 1.0;
 var nn: []u16 = &.{};
 var max_dist: f32 = 1;
 
-/// Blackbody color from the color index, the (BP−RP → Teff → RGB) chain every
-/// sky map uses: hot stars blue, the Sun white-yellow, red dwarfs red.
-fn colorFromIndex(ci: f32) [3]f32 {
-    const t = std.math.clamp((ci + 0.4) / 2.6, 0, 1); // −0.4 (O) … 2.2 (M)
-    // Piecewise through the stellar sequence: O/B → A/F → G → K → M.
-    if (t < 0.25) {
-        const u = t / 0.25;
-        return .{ 0.62 + 0.30 * u, 0.72 + 0.22 * u, 1.00 };
-    } else if (t < 0.5) {
-        const u = (t - 0.25) / 0.25;
-        return .{ 0.92 + 0.08 * u, 0.94 + 0.05 * u, 1.00 - 0.10 * u };
-    } else if (t < 0.72) {
-        const u = (t - 0.5) / 0.22;
-        return .{ 1.00, 0.99 - 0.13 * u, 0.90 - 0.28 * u };
+/// The color of a blackbody at `teff`, done the way colorimetry does it rather
+/// than by eye: the Planckian locus in CIE 1931 xy (Kim et al.'s cubic fit,
+/// good from 1667 K to 25000 K), then xy → XYZ → linear sRGB → gamma.
+///
+/// It replaced a hand-drawn piecewise ramp, and the reason is not that the ramp
+/// looked wrong — it is that a catalog carrying Teff had it thrown away: the
+/// temperature was pushed back through a color index to be looked up in a table
+/// of four guessed line segments. This is the same chain a sky map uses, and it
+/// takes the temperature it is given.
+fn blackbodyRgb(teff: f32) [3]f32 {
+    const t = std.math.clamp(teff, 1667.0, 25000.0);
+    const t2 = t * t;
+    const t3 = t2 * t;
+
+    const x: f32 = if (t < 4000.0)
+        -0.2661239e9 / t3 - 0.2343589e6 / t2 + 0.8776956e3 / t + 0.179910
+    else
+        -3.0258469e9 / t3 + 2.1070379e6 / t2 + 0.2226347e3 / t + 0.240390;
+
+    const x2 = x * x;
+    const x3 = x2 * x;
+    const y: f32 = if (t < 2222.0)
+        -1.1063814 * x3 - 1.34811020 * x2 + 2.18555832 * x - 0.20219683
+    else if (t < 4000.0)
+        -0.9549476 * x3 - 1.37418593 * x2 + 2.09137015 * x - 0.16748867
+    else
+        3.0817580 * x3 - 5.87338670 * x2 + 3.75112997 * x - 0.37001483;
+
+    if (y < 1e-6) return .{ 1, 1, 1 };
+    // Y = 1: the hue is what is wanted here, the brightness comes from the
+    // magnitude (see `flux`).
+    const cx = x / y;
+    const cy: f32 = 1.0;
+    const cz = (1.0 - x - y) / y;
+
+    // CIE XYZ → linear sRGB (sRGB primaries, D65).
+    var rgb = [3]f32{
+        3.2406 * cx - 1.5372 * cy - 0.4986 * cz,
+        -0.9689 * cx + 1.8758 * cy + 0.0415 * cz,
+        0.0557 * cx - 0.2040 * cy + 1.0570 * cz,
+    };
+    // A blackbody can fall outside the sRGB gamut (the deep reds do). Clip to
+    // the gamut, then normalize: a star is drawn at full brightness and dimmed
+    // by its own magnitude, not by where its hue lands.
+    var mx: f32 = 0;
+    for (&rgb) |*c| {
+        c.* = @max(c.*, 0);
+        mx = @max(mx, c.*);
     }
-    const u = (t - 0.72) / 0.28;
-    return .{ 1.00, 0.86 - 0.35 * u, 0.62 - 0.42 * u };
+    if (mx < 1e-6) return .{ 1, 1, 1 };
+    for (&rgb) |*c| {
+        c.* = std.math.pow(f32, c.* / mx, 1.0 / 2.2); // linear → sRGB
+    }
+    return rgb;
 }
 
 fn tempFromIndex(ci: f32) f32 {
@@ -209,7 +251,8 @@ pub fn load(gpa: std.mem.Allocator, io: std.Io) ![]Point {
         if (std.math.isNan(p.color_idx) and !std.math.isNan(p.teff)) p.color_idx = indexFromTemp(p.teff);
         if (std.math.isNan(p.teff) and !std.math.isNan(p.color_idx)) p.teff = tempFromIndex(p.color_idx);
         // Brighter stars are bigger and glow harder — apparent magnitude is a
-        // logarithm, so 5 magnitudes are a factor of 100 in flux.
+        // logarithm, so 5 magnitudes are a factor of 100 in flux, and a factor
+        // of 10 in the radius that carries it (see `Point.flux`).
         const m6 = if (std.math.isNan(p.app_mag)) 6.0 else p.app_mag;
         p.flux = std.math.clamp(std.math.pow(f32, 10.0, (6.0 - m6) / 5.0), 0.25, 6.0);
         try pts.append(gpa, p);
@@ -405,8 +448,13 @@ pub const presets = &[_]app_mod.PresetDef{
 // --- colors ---------------------------------------------------------------------------------
 
 fn colorByStar(p: *const Point, _: f32) [3]f32 {
-    if (std.math.isNan(p.color_idx)) return .{ 0.95, 0.95, 0.92 };
-    return colorFromIndex(p.color_idx);
+    // The temperature IS the color, and `load` resolves one for every star that
+    // has either a Teff or a color index — so this reads the temperature and
+    // nothing else. A Teff catalog used to have its temperature pushed into a
+    // color index and pulled straight back out to be looked up in a ramp; now
+    // the number the catalog measured is the number that picks the color.
+    if (std.math.isNan(p.teff)) return .{ 0.95, 0.95, 0.92 }; // no color, no temperature
+    return blackbodyRgb(p.teff);
 }
 fn colorByDistance(p: *const Point, _: f32) [3]f32 {
     const t = std.math.clamp(p.dist_pc / max_dist, 0, 1);
@@ -419,13 +467,17 @@ fn colorByLuminosity(p: *const Point, _: f32) [3]f32 {
     return .{ 0.2 + 0.8 * t, 0.3 + 0.6 * t, 0.5 + 0.5 * t };
 }
 
-var legend_star = [_]hud_mod.Hud.LegendIn{
-    .{ .rgb = .{ 158, 184, 255 }, .label = "O/B (hot)" },
-    .{ .rgb = .{ 235, 240, 255 }, .label = "A/F" },
-    .{ .rgb = .{ 255, 252, 230 }, .label = "G (sun-like)" },
-    .{ .rgb = .{ 255, 219, 158 }, .label = "K" },
-    .{ .rgb = .{ 255, 130, 51 }, .label = "M (cool)" },
+/// One swatch per spectral class, at the class's own temperature. The colors are
+/// not written here: `buildMenus` asks `blackbodyRgb` for them, the same call the
+/// scene makes, so the legend cannot drift from the stars it is explaining.
+const star_classes = [_]struct { teff: f32, label: []const u8 }{
+    .{ .teff = 20000, .label = "O/B (hot)" },
+    .{ .teff = 7500, .label = "A/F" },
+    .{ .teff = 5800, .label = "G (sun-like)" },
+    .{ .teff = 4400, .label = "K" },
+    .{ .teff = 3200, .label = "M (cool)" },
 };
+var legend_star: [star_classes.len]hud_mod.Hud.LegendIn = undefined;
 var legend_dist = [_]hud_mod.Hud.LegendIn{
     .{ .rgb = .{ 64, 140, 255 }, .label = "near" },
     .{ .rgb = .{ 255, 77, 115 }, .label = "far" },
@@ -460,6 +512,17 @@ fn fDwarfs(p: *const Point) bool {
 }
 
 fn buildMenus() void {
+    for (star_classes, &legend_star) |c, *slot| {
+        const rgb = blackbodyRgb(c.teff);
+        slot.* = .{
+            .rgb = .{
+                @intFromFloat(std.math.clamp(rgb[0], 0, 1) * 255),
+                @intFromFloat(std.math.clamp(rgb[1], 0, 1) * 255),
+                @intFromFloat(std.math.clamp(rgb[2], 0, 1) * 255),
+            },
+            .label = c.label,
+        };
+    }
     color_buf[0] = .{ .name = "stellar color", .color = colorByStar, .legend = &legend_star };
     color_buf[1] = .{ .name = "distance", .color = colorByDistance, .legend = &legend_dist };
     color_buf[2] = .{ .name = "luminosity", .color = colorByLuminosity, .legend = &legend_lum };
@@ -621,7 +684,7 @@ pub fn figure(a: *App, fig_id: []const u8, dots: []hud_mod.FigDot) usize {
         if (std.math.isNan(p.abs_mag) or std.math.isNan(p.color_idx)) continue;
         const x = std.math.clamp((p.color_idx + 0.4) / 2.6, 0, 1) * 2.0 - 1.0;
         const y = std.math.clamp((12.0 - p.abs_mag) / 20.0, 0, 1) * 2.0 - 1.0;
-        const rgb = colorFromIndex(p.color_idx);
+        const rgb = colorByStar(p, 0); // the HR dot wears the star's own color
         dots[n_dots] = .{
             .x = x,
             .y = y,

@@ -193,11 +193,33 @@ pub fn build(b: *std.Build) void {
     // code the native build runs (see src/web.zig, src/platform.zig).
     {
         const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
-        const zicro_dep_web = b.dependency("zicro", .{ .target = wasm_target, .optimize = .ReleaseSmall });
+
+        // Size, not speed — and that is a measurement, not a preference.
+        //
+        // The tab has ONE thread (native `render_cpu` splits the frame across a
+        // pool of band workers; wasm freestanding has none to give it), so the
+        // guess was that -Os was starving a scalar per-pixel loop of the
+        // inlining it lives on, and that -OReleaseFast would pay for itself.
+        // Benchmarked instead of assumed — both builds instantiated in one page,
+        // driven round-robin, scored on the MINIMUM frame so the machine's own
+        // load lands on both — the E8 atlas at 1584×990 came out:
+        //
+        //     ReleaseSmall  0.94 MB   194 ms/frame
+        //     ReleaseFast   3.31 MB   164 ms/frame     → 1.19×
+        //
+        // 19% of a frame for 3.5× the download is a bad trade for a page whose
+        // first act is to fetch this file, and it does not rescue 6 fps anyway:
+        // the frame is dominated by per-pixel work, not by the code quality of
+        // the inner loop (a 24-point scene costs 100 ms at the same size a
+        // 240-point, 6720-edge one costs 153 ms). The lever that matters is
+        // resolution, or a real thread pool. `-Dweb-fast` opts in regardless.
+        const web_fast = b.option(bool, "web-fast", "Build the wasm for speed (-OReleaseFast, ~1.2x the frames, ~3.5x the download)") orelse false;
+        const web_optimize: std.builtin.OptimizeMode = if (web_fast) .ReleaseFast else .ReleaseSmall;
+        const zicro_dep_web = b.dependency("zicro", .{ .target = wasm_target, .optimize = web_optimize });
         const zicro_web = b.createModule(.{
             .root_source_file = zicro_dep_web.builder.path("src/web_root.zig"),
             .target = wasm_target,
-            .optimize = .ReleaseSmall,
+            .optimize = web_optimize,
         });
         zicro_web.addIncludePath(zicro_dep_web.builder.path("vendor/stb"));
         zicro_web.addCSourceFile(.{
@@ -207,7 +229,7 @@ pub fn build(b: *std.Build) void {
         const zrame_web = b.createModule(.{
             .root_source_file = zrame_dep.builder.path("src/web_root.zig"),
             .target = wasm_target,
-            .optimize = .ReleaseSmall,
+            .optimize = web_optimize,
             .imports = &.{.{ .name = "zicro", .module = zicro_web }},
         });
 
@@ -216,7 +238,7 @@ pub fn build(b: *std.Build) void {
         const zengine_stub = b.createModule(.{
             .root_source_file = b.path("src/zengine_web.zig"),
             .target = wasm_target,
-            .optimize = .ReleaseSmall,
+            .optimize = web_optimize,
         });
 
         const web_step = b.step("web", "Build every demo for the browser into zig-out/web");
@@ -239,7 +261,7 @@ pub fn build(b: *std.Build) void {
             const web_mod = b.createModule(.{
                 .root_source_file = b.path("src/web.zig"),
                 .target = wasm_target,
-                .optimize = .ReleaseSmall,
+                .optimize = web_optimize,
                 .imports = &.{
                     .{ .name = "zrame", .module = zrame_web },
                     .{ .name = "zengine", .module = zengine_stub },

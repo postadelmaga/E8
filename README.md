@@ -236,7 +236,7 @@ that already exist should look at your data, and then writing the slides.
 
 | category | domain | asset | its specialized tool |
 |---|---|---|---|
-| Chemistry & structural biology | `chem` | PDB, XYZ | **the online vocabulary**: a molecule by name from **PubChem** (3D conformer → XYZ), a structure by ID from **RCSB** |
+| Chemistry & structural biology | `chem` | PDB, XYZ | **the online vocabulary**: a molecule by name from **PubChem** (3D conformer → XYZ), a structure by ID from **RCSB**; `M` measures, `B` redraws (ball-and-stick → spacefill → sticks) |
 | Astronomy | `astro` | catalog CSV | the H–R diagram, blackbody color |
 | Networks & graphs | `graph` | GraphML, edge list | the Laplacian spectrum, communities |
 | Tables | `data` | CSV, TSV | principal axes, k-NN |

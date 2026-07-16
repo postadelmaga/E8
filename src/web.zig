@@ -41,7 +41,14 @@ const still_mod = @import("still.zig");
 const App = app_mod.App;
 const D = app_mod.D;
 
-const gpa = std.heap.wasm_allocator;
+// `wasm_allocator` takes its pages by calling `memory.grow` ITSELF — right for the
+// freestanding build, where nothing else owns the heap. On emscripten `malloc` owns it,
+// and this build fixes the heap (growth off, so the page's views cannot detach), so
+// wasm_allocator's first grow fails, every allocation returns null, and `zicroBoot`
+// walks out through one of its `catch return`s WITHOUT A WORD: a window with no size, a
+// scene that never boots, and a page that says "no GPU path" while both devices sat
+// there unasked. Use libc's, which is the one that owns the memory here.
+const gpa = if (scene.enabled) std.heap.c_allocator else std.heap.wasm_allocator;
 
 const fovy = std.math.degreesToRadians(45.0);
 const point_radius: f32 = 0.045;

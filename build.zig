@@ -283,6 +283,132 @@ pub fn build(b: *std.Build) void {
         }
     }
 
+    // `zig build web-gpu` — the atlas drawn by the GPU, in a tab.
+    //
+    // A SECOND web build, not a replacement, and the target is why: the software path
+    // above is `wasm32-freestanding` (no libc, its own hand-rolled JS harness), while a
+    // browser's WebGPU is not something a freestanding wasm can link — it is Dawn's JS
+    // bindings, and emcc generates them. So this one is `wasm32-emscripten`, emcc is the
+    // LINKER, and the two builds share source but not a toolchain.
+    //
+    // Worth the second build because the frame is per-pixel work on the tab's ONE thread
+    // (see the note in demo.html): the atlas is ~6 fps at 1584×990 no matter how the
+    // rasterizer is tuned. Zengine's `ze_wgpu.MeshPresent` (its issue #88) hands the
+    // whole figure to the GPU as two instanced draws.
+    //
+    // Wired BY HAND, like Zengine's own web build: `b.dependency(...)` would drag the
+    // engine's native halves (Vulkan, meshoptimizer, ufbx) at an emscripten target that
+    // cannot have them. Modules are made from the deps' source paths instead.
+    {
+        const emcc = b.findProgram(&.{"emcc"}, &.{}) catch null;
+        const gpu_step = b.step("web-gpu", "Build the GPU (WebGPU) web build into zig-out/web/gpu");
+        if (emcc) |emcc_path| {
+            const em_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .emscripten });
+            // Zig ships no libc for this target — emcc does, and emcc links, so the
+            // headers have to be pointed at by hand. Same for Dawn's `webgpu.h`, which
+            // the emdawnwebgpu port drops in the emsdk cache.
+            const emsdk = std.fs.path.dirname(emcc_path).?;
+            const sysroot = b.pathJoin(&.{ emsdk, "cache", "sysroot", "include" });
+            const dawn_include = b.option([]const u8, "dawn-include", "Dawn's webgpu.h directory (default: the emsdk cache)") orelse
+                b.pathJoin(&.{ emsdk, "cache", "ports", "emdawnwebgpu", "emdawnwebgpu_pkg", "webgpu", "include" });
+
+            const Em = struct {
+                b: *std.Build,
+                target: std.Build.ResolvedTarget,
+                sysroot: []const u8,
+                fn make(self: @This(), root: std.Build.LazyPath) *std.Build.Module {
+                    const m = self.b.createModule(.{
+                        .root_source_file = root,
+                        .target = self.target,
+                        .optimize = .ReleaseFast,
+                        // Mandatory: without it `std.start` tries to synthesize `_start`
+                        // and dies on wasm. emcc owns the entry here.
+                        .link_libc = true,
+                    });
+                    m.addIncludePath(.{ .cwd_relative = self.sysroot });
+                    return m;
+                }
+            };
+            const em = Em{ .b = b, .target = em_target, .sysroot = sysroot };
+
+            // Hand-made from the deps' source paths, NOT `b.dependency(...).module(...)`,
+            // and both halves of that are forced:
+            //
+            //  · zicro's published `zicro_wgpu` links wgpu-native — the DESKTOP device.
+            //    A browser implements webgpu.h itself (emcc's Dawn port does), so the
+            //    published module is the wrong one here and drags a native library a
+            //    wasm cannot link.
+            //  · so the module has to be made here — and then it must be the ONLY one.
+            //    Taking `ze_wgpu` from the dependency brings that module's own zicro
+            //    along, and Zig will not put one file in two modules ("file exists in
+            //    modules 'zicro_wgpu' and 'zicro_wgpu0'"), which is the collision
+            //    `ze_wgpu.zig`'s header warns about.
+            //
+            // Zengine's own web build does exactly this for exactly this reason.
+            const zw = em.make(zicro_dep.builder.path("src/gpu_wgpu.zig"));
+            zw.addIncludePath(.{ .cwd_relative = dawn_include });
+            const ze_rhi = em.make(zb.path("src/gpu/rhi.zig")); // std only
+            const ze_wgpu = em.make(zb.path("src/ze_wgpu.zig"));
+            ze_wgpu.addImport("ze_rhi", ze_rhi);
+            ze_wgpu.addImport("zicro_wgpu", zw);
+
+            // …and the price of hand-wiring: `rhi_wgpu.zig` @embedFiles the WGSL for
+            // its own pipelines, so the consumer has to produce it. GLSL → SPIR-V
+            // (unoptimised: glslc's -O folds constants naga then rejects) → WGSL, the
+            // only form a browser takes. The defines are the push-constant-free variant
+            // WebGPU needs.
+            const inst_shaders = .{
+                .{ .stage = "vertex", .src = "src/gpu/mesh3d_inst.vert", .import = "mesh3d_inst_vert_spv" },
+                .{ .stage = "fragment", .src = "src/gpu/mesh3d_inst.frag", .import = "mesh3d_inst_frag_spv" },
+            };
+            inline for (inst_shaders) |s| {
+                const glslc = b.addSystemCommand(&.{"glslc"});
+                glslc.addArg("-fshader-stage=" ++ s.stage);
+                glslc.addArg("-O0");
+                glslc.addArg("--target-env=vulkan1.1");
+                glslc.addArg("-DZE_PUSH_UNIFORM");
+                glslc.addArg("-DZE_SPLIT_SAMPLERS");
+                glslc.addFileArg(zb.path(s.src));
+                glslc.addArg("-o");
+                const spv = glslc.addOutputFileArg(s.import ++ ".spv");
+
+                const naga = b.addSystemCommand(&.{"naga"});
+                naga.addFileArg(spv);
+                const wgsl = naga.addOutputFileArg(s.import ++ ".wgsl");
+                ze_wgpu.addAnonymousImport(s.import ++ "_wgsl", .{ .root_source_file = wgsl });
+            }
+
+            const gpu_mod = em.make(b.path("src/web_gpu.zig"));
+            gpu_mod.addImport("zicro_wgpu", zw);
+            gpu_mod.addImport("ze_wgpu", ze_wgpu);
+
+            const gpu_lib = b.addLibrary(.{ .name = "e8gpu", .linkage = .static, .root_module = gpu_mod });
+            const link = b.addSystemCommand(&.{emcc_path});
+            link.addFileArg(gpu_lib.getEmittedBin());
+            link.addArgs(&.{
+                "--use-port=emdawnwebgpu", // the WebGPU JS bindings answering webgpu.h
+                "-sENVIRONMENT=web",
+                "-sALLOW_MEMORY_GROWTH=1",
+                "-sEXPORTED_FUNCTIONS=_ze_boot,_ze_look,_ze_dolly,_ze_resize,_ze_frames,_ze_ms,_ze_error,_malloc,_free",
+                "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString",
+                "-sINVOKE_RUN=0", // no main: the page calls _ze_boot
+                "-sEXIT_RUNTIME=0",
+                "-O3",
+                "-o",
+            });
+            const js = link.addOutputFileArg("e8gpu.js");
+            link.step.dependOn(&gpu_lib.step);
+            gpu_step.dependOn(&b.addInstallFileWithDir(js, .{ .custom = "web/gpu" }, "e8gpu.js").step);
+            gpu_step.dependOn(&b.addInstallFileWithDir(js.dirname().path(b, "e8gpu.wasm"), .{ .custom = "web/gpu" }, "e8gpu.wasm").step);
+            gpu_step.dependOn(&b.addInstallFileWithDir(b.path("web/gpu.html"), .{ .custom = "web/gpu" }, "index.html").step);
+        } else {
+            // Not an error: the CPU web build is the one that always works, and a
+            // machine without Emscripten should still be able to build everything else.
+            const msg = b.addFail("emcc not found — the GPU web build needs Emscripten (source emsdk_env.sh). The software build, `zig build web`, needs nothing.");
+            gpu_step.dependOn(&msg.step);
+        }
+    }
+
     // Tests: the root-system math is exact Lie theory — every invariant is checked.
     // E8 (Lisi's 240 roots) and E10 (the M-theory demo: the Lorentzian lattice,
     // the Dynkin diagram recovered from the simple roots, the BKL billiard).

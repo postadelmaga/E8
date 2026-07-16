@@ -266,6 +266,15 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "zrame", .module = zrame_web },
                     .{ .name = "zengine", .module = zengine_stub },
                     .{ .name = "build_options", .module = web_opt.createModule() },
+                    // The rasterizer this build does NOT have. `web.zig` is one file
+                    // with two, and the build picks which one answers to the name —
+                    // here the off switch, so `scene.enabled` is comptime false and the
+                    // wgpu modules (emscripten-only) are never named at all.
+                    .{ .name = "scene_gpu", .module = b.createModule(.{
+                        .root_source_file = b.path("src/scene_gpu_off.zig"),
+                        .target = wasm_target,
+                        .optimize = web_optimize,
+                    }) },
                 },
             });
             const web_exe = b.addExecutable(.{ .name = b.fmt("e8-{s}", .{name}), .root_module = web_mod });
@@ -357,9 +366,16 @@ pub fn build(b: *std.Build) void {
             // (unoptimised: glslc's -O folds constants naga then rejects) → WGSL, the
             // only form a browser takes. The defines are the push-constant-free variant
             // WebGPU needs.
+            // The bloom four come along even though this build asks for glow = 0: the
+            // composite is behind a runtime `if`, but @embedFile is comptime, so the
+            // function is analysed and its shaders must exist regardless.
             const inst_shaders = .{
-                .{ .stage = "vertex", .src = "src/gpu/mesh3d_inst.vert", .import = "mesh3d_inst_vert_spv" },
-                .{ .stage = "fragment", .src = "src/gpu/mesh3d_inst.frag", .import = "mesh3d_inst_frag_spv" },
+                .{ .stage = "vertex", .src = "src/gpu/mesh3d_inst.vert", .import = "mesh3d_inst_vert_spv", .gles = true },
+                .{ .stage = "fragment", .src = "src/gpu/mesh3d_inst.frag", .import = "mesh3d_inst_frag_spv", .gles = true },
+                .{ .stage = "vertex", .src = "src/gpu/bloom_fullscreen.vert", .import = "bloom_vert_spv", .gles = false },
+                .{ .stage = "fragment", .src = "src/gpu/bloom_bright.frag", .import = "bloom_bright_spv", .gles = false },
+                .{ .stage = "fragment", .src = "src/gpu/bloom_blur.frag", .import = "bloom_blur_spv", .gles = false },
+                .{ .stage = "fragment", .src = "src/gpu/bloom_composite.frag", .import = "bloom_composite_spv", .gles = false },
             };
             inline for (inst_shaders) |s| {
                 const glslc = b.addSystemCommand(&.{"glslc"});
@@ -390,15 +406,44 @@ pub fn build(b: *std.Build) void {
                 // and answers an unknown one by printing a line and exiting ZERO — so
                 // `.glsl` here produces no file and no error, and the build only trips
                 // later on a missing @embedFile. Hence .vert/.frag, per stage.
-                const naga_gl = b.addSystemCommand(&.{ "naga", "--profile", "es300" });
-                naga_gl.addFileArg(spv);
-                const gles = naga_gl.addOutputFileArg(s.import ++ (if (std.mem.eql(u8, s.stage, "vertex")) ".vert" else ".frag"));
-                ze_wgpu.addAnonymousImport(s.import ++ "_gles", .{ .root_source_file = gles });
+                // Only the instanced pair has a twin to feed: `gles_mesh.zig` embeds
+                // these two and nothing else (the bloom chain is WebGPU-only, which is
+                // exactly why this build asks for glow = 0 — see scene_gpu.zig).
+                if (s.gles) {
+                    const naga_gl = b.addSystemCommand(&.{ "naga", "--profile", "es300" });
+                    naga_gl.addFileArg(spv);
+                    const gles = naga_gl.addOutputFileArg(s.import ++ (if (std.mem.eql(u8, s.stage, "vertex")) ".vert" else ".frag"));
+                    ze_wgpu.addAnonymousImport(s.import ++ "_gles", .{ .root_source_file = gles });
+                }
             }
 
-            const gpu_mod = em.make(b.path("src/web_gpu.zig"));
-            gpu_mod.addImport("zicro_wgpu", zw);
-            gpu_mod.addImport("ze_wgpu", ze_wgpu);
+            // The scene's GPU rasterizer — the module `web.zig` names `scene_gpu`.
+            const scene_gpu = em.make(b.path("src/scene_gpu.zig"));
+            scene_gpu.addImport("zicro_wgpu", zw);
+            scene_gpu.addImport("ze_wgpu", ze_wgpu);
+
+            // …and the tool itself, THE SAME `web.zig` the software build compiles. The
+            // window, the input, the plugins, the deck and the HUD come along for free
+            // because they were never copied; only the rasterizer differs, and it differs
+            // at comptime. zrame/zicro have to be rebuilt for wasm32-emscripten (the
+            // software build targets wasm32-freestanding) — same sources, other target.
+            const zicro_em = em.make(zicro_dep.builder.path("src/web_root.zig"));
+            zicro_em.addIncludePath(zicro_dep.builder.path("vendor/stb"));
+            zicro_em.addCSourceFile(.{
+                .file = zicro_dep.builder.path("vendor/stb/stb_truetype_web.c"),
+                .flags = &.{ "-O2", "-fno-sanitize=undefined" },
+            });
+            const zrame_em = em.make(zrame_dep.builder.path("src/web_root.zig"));
+            zrame_em.addImport("zicro", zicro_em);
+
+            const gpu_opt = b.addOptions();
+            gpu_opt.addOption([]const u8, "demo", "lisi");
+
+            const gpu_mod = em.make(b.path("src/web.zig"));
+            gpu_mod.addImport("zrame", zrame_em);
+            gpu_mod.addImport("zengine", em.make(b.path("src/zengine_web.zig")));
+            gpu_mod.addImport("build_options", gpu_opt.createModule());
+            gpu_mod.addImport("scene_gpu", scene_gpu);
 
             const gpu_lib = b.addLibrary(.{ .name = "e8gpu", .linkage = .static, .root_module = gpu_mod });
             const link = b.addSystemCommand(&.{emcc_path});
@@ -412,9 +457,31 @@ pub fn build(b: *std.Build) void {
                 "-sMIN_WEBGL_VERSION=2",
                 "-sMAX_WEBGL_VERSION=2",
                 "-sENVIRONMENT=web",
-                "-sALLOW_MEMORY_GROWTH=1",
-                "-sEXPORTED_FUNCTIONS=_ze_boot,_ze_look,_ze_dolly,_ze_resize,_ze_frames,_ze_ms,_ze_error,_ze_backend,_ze_force_gl,_malloc,_free",
-                "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString",
+                // A fixed heap, cut once and large enough. NOT growth: when the heap
+                // grows, wasm hands back a NEW ArrayBuffer and every view the page holds
+                // — the pixels it blits, the scene rect it reads — is detached and throws
+                // on the next frame. The page would have to re-derive its views each tick
+                // and would still race the growth that happened mid-frame. 256 MB costs
+                // nothing until touched and removes the whole class.
+                "-sINITIAL_MEMORY=268435456",
+                "-sALLOW_MEMORY_GROWTH=0",
+                // The tool's whole ABI: zicro's window seam (frame, input, the pixel
+                // buffer) plus web.zig's own. emcc strips what is not named here, and a
+                // missing name is a page that boots into a dead canvas — so this list is
+                // the two `export fn` sets, not a guess.
+                "-sEXPORTED_FUNCTIONS=" ++
+                    "_zicroFrame,_zicroPixels,_zicroResize,_zicroKey,_zicroPointerMove," ++
+                    "_zicroPointerButton,_zicroScroll,_zicroSetTouch,_zicroTouch," ++
+                    "_zicroWidth,_zicroHeight," ++
+                    "_zicroBoot,_zicroTap,_zicroCamera,_zicroOptions,_zicroOptionsLen," ++
+                    "_zicroSceneScale,_zicroSceneRect,_zicroSceneDevice,_zicroForceGl," ++
+                    "_zicroOpenFile,_zicroFileBuffer,_zicroFileName,_zicroAddImage," ++
+                    "_zicroDeckBuffer,_zicroDeckZon,_zicroDeckZonLen,_zicroApplyDeck," ++
+                    "_malloc,_free",
+                // HEAPU8 is not on `Module` unless it is named here, and without it the
+                // page cannot reach the pixels the software canvas paints — the frame
+                // loop throws on its first tick and the tab goes quiet.
+                "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
                 "-sINVOKE_RUN=0", // no main: the page calls _ze_boot
                 "-sEXIT_RUNTIME=0",
                 "-O3",

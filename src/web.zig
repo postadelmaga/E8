@@ -19,6 +19,17 @@ const zrame = @import("zrame");
 const geom = @import("geom.zig");
 const hud_mod = @import("hud.zig");
 const render_cpu = @import("render_cpu.zig");
+// The OTHER rasterizer. A module name, not a path: build.zig answers it with
+// `scene_gpu.zig` for `zig build web-gpu` and with `scene_gpu_off.zig` for
+// `zig build web`, so the software build never names a wgpu module and
+// `scene.enabled` is comptime false everywhere below. One harness, two devices.
+const scene = @import("scene_gpu");
+
+// Only the emscripten build needs these: std's default log/panic reach stderr through
+// `std.Io`, which on that target drags in threaded/posix code a tab has no use for and
+// which does not compile. The freestanding build keeps the defaults it always had.
+pub const std_options: std.Options = if (scene.enabled) .{ .logFn = scene.consoleLog } else .{};
+pub const panic = if (scene.enabled) scene.panic_impl else std.debug.FullPanic(std.debug.defaultPanic);
 const app_mod = @import("app.zig");
 const keys = @import("keys.zig");
 const deck_mod = @import("deck.zig");
@@ -444,7 +455,11 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
     // smaller space (projection, radii, the pick), so nothing has to know it is not
     // 1:1 except the one blit that puts it back. `sw`/`sh` are kept at least 2 so the
     // focal and centre never divide by a degenerate size.
-    const scale = std.math.clamp(g_scene_scale, 0.35, 1.0);
+    // The GPU draws at 1:1 and does not need the governor: the whole reason that knob
+    // exists is that the software path pays per pixel on one thread. Keeping scale at 1
+    // here also keeps `scr` — which the pick and the labels read — in the same space the
+    // GPU rasterizes, so a click lands on the root the finger is over.
+    const scale = if (scene.enabled) 1.0 else std.math.clamp(g_scene_scale, 0.35, 1.0);
     const sw: u32 = @max(2, @as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(rw)) * scale))));
     const sh: u32 = @max(2, @as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(rh)) * scale))));
 
@@ -478,6 +493,18 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
     g_app.info_dirty = false;
     for (0..n_pts) |i| g_app.visuals[i] = app_mod.rootVisual(&g_app, i);
     const pairs = app_mod.edgePairs(&g_app);
+
+    if (scene.enabled) {
+        gpuScene(eye, rw, rh, ox, oy, n_pts, pairs);
+        hud_mod.Hud.onDraw(canvas, content, hud);
+        if (g_app.anim - g_last_status > 0.5 or g_app.status_dirty) {
+            g_last_status = g_app.anim;
+            var buf: [256]u8 = undefined;
+            hud.setLine1(app_mod.buildStatus(&g_app, &buf));
+            g_app.status_dirty = false;
+        }
+        return;
+    }
 
     g_cpu.ensure(sw, sh) catch return;
     g_cpu.clear();
@@ -551,6 +578,66 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
 }
 var g_last_status: f32 = 0;
 
+/// The figure, as instances rather than pixels — the same points, the same edges, and
+/// the same colours the plugins just chose. This reads `g_app.visuals` and `edgePairs`,
+/// exactly as the software rasterizer does two screens down; that is the whole point of
+/// there being one `draw` and not two. Nothing here decides anything about E8.
+fn gpuScene(eye: [3]f32, rw: u32, rh: u32, ox: f32, oy: f32, n_pts: usize, pairs: []const [2]u16) void {
+    // The canvas follows the same slot the software build blits into, so the panel keeps
+    // its gutter and the figure sits where it always sat. JS reads this and moves the
+    // GPU canvas; the wasm never touches the DOM.
+    g_scene_rect = .{
+        @intFromFloat(@max(ox, 0)),
+        @intFromFloat(@max(oy, 0)),
+        rw,
+        rh,
+    };
+    scene.resize(rw, rh);
+    if (!scene.ready()) return; // the adapter chain has not answered yet
+
+    const aspect = @as(f32, @floatFromInt(rw)) / @as(f32, @floatFromInt(@max(rh, 1)));
+    const vp = scene.viewProj(eye, aspect, fovy);
+
+    var n: usize = 0;
+    for (0..n_pts) |i| {
+        if (!g_app.vis[i]) continue;
+        if (n == g_insts.len) break;
+        const v = &g_app.visuals[i];
+        // Alpha is the seam's EMISSIVE weight, so a root the plugins made bright glows
+        // instead of merely being pale.
+        g_insts[n] = scene.Instance.at(g_app.p3[i], point_radius * v.radius, .{
+            v.color[0], v.color[1], v.color[2], std.math.clamp(v.bright, 0.0, 1.0),
+        });
+        n += 1;
+    }
+    const n_sphere: u32 = @intCast(n);
+
+    for (pairs) |ed| {
+        if (n == g_insts.len) break;
+        const a = ed[0];
+        const b = ed[1];
+        if (!g_app.vis[a] or !g_app.vis[b]) continue;
+        const ev = app_mod.edgeVisual(&g_app, a, b) orelse continue;
+        const p = g_app.p3[a];
+        const q = g_app.p3[b];
+        const d = [3]f32{ q[0] - p[0], q[1] - p[1], q[2] - p[2] };
+        const len = @sqrt(dot3(d, d));
+        if (len < 1e-6) continue;
+        g_insts[n] = scene.Instance.along(p, d, 0.006, len, .{
+            ev.color[0], ev.color[1], ev.color[2], std.math.clamp(ev.k, 0.0, 1.0),
+        });
+        n += 1;
+    }
+    const n_tube: u32 = @as(u32, @intCast(n)) - n_sphere;
+
+    const m = scene.meshes();
+    const draws = [_]scene.Draw{
+        .{ .first_vertex = m.sphere_first, .vertex_count = m.sphere_count, .first_instance = 0, .instance_count = n_sphere },
+        .{ .first_vertex = m.tube_first, .vertex_count = m.tube_count, .first_instance = n_sphere, .instance_count = n_tube },
+    };
+    scene.render(g_insts[0..n], &draws, vp, .{ 0, 0, 0, 1 });
+}
+
 /// wasm has no main: JS calls this once.
 export fn zicroBoot() void {
     if (g_booted) return;
@@ -575,7 +662,12 @@ export fn zicroBoot() void {
         // other colour, however dark, redraws the frame it was meant to remove: the
         // figure's buffer becomes a card of one black laid on a desk of another, and
         // the seam between them is a border again — just a quieter one.
-        .style = .{ .glass = zrame.Color.rgba(0, 0, 0, 1.0) },
+        //
+        // On the GPU build the same reasoning inverts: the figure is not in this buffer
+        // at all, it is on the WebGPU canvas UNDERNEATH. So the fill has to be nothing —
+        // alpha 0, a hole the scene shows through — and the HUD, drawn at fixed pixel
+        // sizes into this canvas, stays crisp over it whatever the figure below costs.
+        .style = .{ .glass = zrame.Color.rgba(0, 0, 0, if (scene.enabled) 0.0 else 1.0) },
         .close_on_esc = false,
         .on_key = onKey,
         .on_scroll = onScroll,
@@ -602,6 +694,35 @@ export fn zicroBoot() void {
     g_dot_jobs = gpa.alloc(render_cpu.Dot, points.len) catch return;
     g_order = gpa.alloc(u16, points.len) catch return;
 
+    if (scene.enabled) {
+        // The adapter chain is async, so this only starts it: `scene.ready()` turns true
+        // some frames later, and until it does `draw` simply skips the figure and the
+        // HUD narrates over black. The size is provisional — `draw` corrects it from the
+        // real layout on the first frame.
+        g_insts = gpa.alloc(scene.Instance, points.len + max_pairs) catch return;
+        scene.boot("#e8gpu", 1200, 760, g_force_gl);
+    }
+
     app_mod.dispatchInit(&g_app);
     g_booted = true;
+}
+
+/// The instance stream, rebuilt every frame from whatever the plugins decided this tick.
+var g_insts: []scene.Instance = &.{};
+/// `?force=gl` on the page: reach the twin even where an adapter answers, or it is only
+/// ever exercised where it cannot be watched.
+var g_force_gl = false;
+export fn zicroForceGl() void {
+    g_force_gl = true;
+}
+/// Where the figure goes, in canvas pixels: x, y, w, h. The GPU canvas is a DOM element
+/// of its own, so JS reads this each frame and lays it exactly over the slot the software
+/// build blits into — same layout, same gutter for the panel, whichever device draws.
+var g_scene_rect: [4]u32 = .{ 0, 0, 0, 0 };
+export fn zicroSceneRect() [*]const u32 {
+    return &g_scene_rect;
+}
+/// 2 = WebGPU, 1 = the WebGL2 twin, 0 = neither yet.
+export fn zicroSceneDevice() u32 {
+    return scene.device();
 }

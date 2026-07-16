@@ -7,65 +7,69 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307080c'/%3E%3Ccircle cx='16' cy='16' r='2.6' fill='%23f0e2aa'/%3E%3C/svg%3E" />
 <style>
   html, body { margin:0; height:100%; background:#000; overflow:hidden; overscroll-behavior:none; }
-  canvas { display:block; width:100vw; height:100vh; touch-action:none; outline:none; }
-  #hud { position:fixed; left:14px; top:12px; z-index:2; pointer-events:none;
-         font:13px/1.5 ui-monospace, monospace; color:#c6d0e0; text-shadow:0 1px 3px #000; }
-  #fps { color:#78e6a0; font-weight:600; }
-  #hint { position:fixed; left:50%; bottom:22px; transform:translateX(-50%); z-index:2;
-          color:#c6d0e0; background:rgba(10,12,20,.66); border:1px solid rgba(120,140,180,.28);
-          border-radius:16px; padding:9px 18px; font:14px/1.4 system-ui, sans-serif;
-          pointer-events:none; transition:opacity .6s ease; }
+  /* TWO CANVASES, STACKED. The figure is the GPU's; the HUD is not — it is drawn at
+     fixed pixel sizes into zicro's software canvas, which is why scaling the whole
+     buffer once ran the status line off the edge. So the HUD gets its own 2D canvas on
+     top, with a transparent glass, and stays crisp whatever the figure below costs. */
+  #e8gpu { position:fixed; left:0; top:0; z-index:0; display:block; background:#000; }
+  #hud2d { position:fixed; inset:0; z-index:1; width:100vw; height:100vh;
+           display:block; touch-action:none; outline:none; }
   #boot { position:fixed; inset:0; display:grid; place-content:center; z-index:3;
-          color:#8fa3c4; font:15px/1.6 system-ui, sans-serif; text-align:center; padding:2rem;
-          background:#000; }
+          color:#8fa3c4; font:15px/1.6 system-ui, sans-serif; text-align:center;
+          padding:2rem; background:#000; }
   #boot.bad { color:#ff9d9d; }
   #boot a { color:#9fb4d8; }
-  #top { position:fixed; right:14px; top:12px; z-index:2; font:13px system-ui, sans-serif; }
-  #top a { color:#9fb4d8; text-decoration:none; border:1px solid rgba(120,140,180,.3);
-           background:rgba(10,12,20,.6); border-radius:10px; padding:7px 12px; }
+  #dev { position:fixed; right:14px; top:12px; z-index:2; pointer-events:none;
+         font:12px ui-monospace, monospace; color:#78e6a0; text-shadow:0 1px 3px #000; }
 </style>
 </head>
 <body>
-<canvas id="e8"></canvas>
-<div id="hud"><span id="fps">—</span> · 240 roots + 6720 edges · 2 instanced draws · <span id="dev">…</span></div>
-<div id="top"><a href="../">‹ All demos</a></div>
-<div id="hint">drag to orbit · scroll to zoom</div>
+<canvas id="e8gpu"></canvas>
+<canvas id="hud2d" tabindex="0"></canvas>
+<div id="dev"></div>
 <div id="boot">starting the GPU…</div>
 
 <script>
-// The page owns the loop's host: emscripten calls _ze_boot, the wasm sets its own
-// main loop, and everything below only feeds it the canvas size and the mouse.
+// The SAME tool as demo.html — same window, same plugins, same deck, same keys. The one
+// difference is underneath: `web.zig` was compiled with its GPU rasterizer, so the figure
+// goes to #e8gpu through Zengine's instanced mesh seam and the software canvas above
+// carries only the HUD. The wasm never touches the DOM; it publishes the scene's slot
+// and this page lays the GPU canvas over it.
 const boot = document.getElementById("boot");
-const cv = document.getElementById("e8");
-const hint = document.getElementById("hint");
-
-// No WebGPU gate any more. `navigator.gpu` existing proves nothing — this laptop's
-// Chrome has it and still answers requestAdapter with null — and refusing on that
-// check hid the scene from the machines that could have drawn it via WebGL2. The wasm
-// asks the adapter four times and falls to the twin (Zengine #88, follow-up 3), so the
-// page just boots and lets it report which device it landed on.
+const gpuCv = document.getElementById("e8gpu");
+const canvas = document.getElementById("hud2d");
+const ctx = canvas.getContext("2d", { alpha: true }); // alpha: the glass is a HOLE
 const forceGl = new URLSearchParams(location.search).get("force") === "gl";
+
+let x = null, dpr = 1;
+// NOT cached: -sALLOW_MEMORY_GROWTH replaces the ArrayBuffer when the heap grows, and a
+// view built on the old one is detached and reads as empty. emscripten refreshes HEAPU8,
+// so ask it every time.
+const buf = () => Module.HEAPU8.buffer;
 
 var Module = {
   onRuntimeInitialized() {
+    // emscripten prefixes its exports; the loop below is demo.html's, unchanged.
+    x = new Proxy({}, { get: (_, k) => Module["_" + k] });
+    if (forceGl) Module._zicroForceGl();
     resize();
-    if (forceGl && Module._ze_force_gl) Module._ze_force_gl();
-    Module._ze_boot();
-    // _ze_boot is async underneath (adapter → device): poll for the error string
-    // rather than assume it came up.
+    Module._zicroBoot();
+    requestAnimationFrame(frame);
     let tries = 0;
     const check = () => {
-      const e = Module.UTF8ToString(Module._ze_error());
-      if (e) { boot.className = "bad"; boot.textContent = e; return; }
-      if (Module._ze_frames() > 0) {
+      const d = Module._zicroSceneDevice();
+      if (d > 0) {
         boot.style.display = "none";
-        // Name the device that actually drew, not the one we hoped for.
-        const b = Module._ze_backend();
         document.getElementById("dev").textContent =
-          b === 2 ? "WebGPU" : b === 1 ? "WebGL2 (twin)" : "—";
+          d === 2 ? "WebGPU" : "WebGL2 (twin)";
         return;
       }
-      if (++tries > 200) { boot.className = "bad"; boot.textContent = "the GPU never drew a frame"; return; }
+      if (++tries > 200) {
+        boot.className = "bad";
+        boot.innerHTML = "No GPU path in this browser — neither WebGPU nor WebGL2.<br><br>" +
+          "<a href='../demo.html?d=lisi'>Open the software build instead →</a>";
+        return;
+      }
       setTimeout(check, 50);
     };
     check();
@@ -73,36 +77,72 @@ var Module = {
 };
 
 function resize() {
-  // Cap the ratio: this is the GPU's pixel count, and a phone at dpr 3 is asking for
-  // four times the fill for a difference it cannot show.
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
   const w = Math.round(window.innerWidth * dpr), h = Math.round(window.innerHeight * dpr);
-  cv.width = w; cv.height = h;
-  if (Module._ze_resize) Module._ze_resize(w, h);
+  canvas.width = w; canvas.height = h;
+  if (x) x.zicroResize(w, h, dpr);
 }
 addEventListener("resize", resize);
 
-// --- orbit ---------------------------------------------------------------------------
-let down = false, lx = 0, ly = 0;
-const used = () => { hint.style.opacity = "0"; };
-cv.addEventListener("pointerdown", (e) => { down = true; lx = e.clientX; ly = e.clientY; cv.setPointerCapture(e.pointerId); used(); });
-cv.addEventListener("pointerup", () => { down = false; });
-cv.addEventListener("pointercancel", () => { down = false; });
-cv.addEventListener("pointermove", (e) => {
-  if (!down || !Module._ze_look) return;
-  Module._ze_look((e.clientX - lx) * 0.008, (e.clientY - ly) * 0.008);
-  lx = e.clientX; ly = e.clientY;
-});
-cv.addEventListener("wheel", (e) => {
-  e.preventDefault(); used();
-  if (Module._ze_dolly) Module._ze_dolly(e.deltaY * 0.0012);
-}, { passive: false });
+// The scene's slot, straight from the wasm: the same rect the software build blits into,
+// so the panel keeps its gutter and the figure sits where it always sat.
+let sx = -1, sy = -1, sw = -1, sh = -1;
+function placeScene() {
+  const p = Module._zicroSceneRect() >> 2;
+  const r = new Uint32Array(buf(), p << 2, 4);
+  if (r[0] === sx && r[1] === sy && r[2] === sw && r[3] === sh) return;
+  [sx, sy, sw, sh] = r;
+  if (sw < 2 || sh < 2) return;
+  gpuCv.width = sw; gpuCv.height = sh;
+  gpuCv.style.left = (sx / dpr) + "px";
+  gpuCv.style.top = (sy / dpr) + "px";
+  gpuCv.style.width = (sw / dpr) + "px";
+  gpuCv.style.height = (sh / dpr) + "px";
+}
 
-setInterval(() => {
-  if (!Module._ze_ms) return;
-  const ms = Module._ze_ms();
-  document.getElementById("fps").textContent = ms > 0.01 ? (1000 / ms).toFixed(0) + " FPS" : "—";
-}, 500);
+function frame(tMs) {
+  x.zicroFrame(tMs);
+  placeScene();
+  const w = x.zicroWidth(), h = x.zicroHeight();
+  if (w > 0 && h > 0) {
+    const bytes = new Uint8ClampedArray(buf(), x.zicroPixels(), w * h * 4);
+    ctx.clearRect(0, 0, w, h);          // the glass is transparent: clear, don't paint over
+    ctx.putImageData(new ImageData(bytes, w, h), 0, 0);
+  }
+  requestAnimationFrame(frame);
+}
+
+// --- input: the canvas's own coordinates, so a click lands where the finger is ---------
+const pos = (e) => {
+  const r = canvas.getBoundingClientRect();
+  const kx = canvas.width / (r.width || 1), ky = canvas.height / (r.height || 1);
+  return [(e.clientX - r.left) * kx, (e.clientY - r.top) * ky];
+};
+canvas.addEventListener("pointerdown", (e) => {
+  const p = pos(e); x.zicroPointerMove(p[0], p[1]);
+  x.zicroPointerButton(e.button === 2 ? 1 : 0, 1);
+  canvas.setPointerCapture(e.pointerId); canvas.focus();
+});
+canvas.addEventListener("pointerup", (e) => {
+  const p = pos(e); x.zicroPointerMove(p[0], p[1]);
+  x.zicroPointerButton(e.button === 2 ? 1 : 0, 0);
+});
+canvas.addEventListener("pointermove", (e) => { const p = pos(e); x.zicroPointerMove(p[0], p[1]); });
+canvas.addEventListener("wheel", (e) => { e.preventDefault(); x.zicroScroll(0, -Math.sign(e.deltaY)); }, { passive: false });
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const c = e.key.length === 1 ? e.key.charCodeAt(0) : ({ Escape: 27, Enter: 13, " ": 32,
+    ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Tab: 9, Backspace: 8 })[e.key];
+  if (c === undefined) return;
+  e.preventDefault(); x.zicroKey(c, 1);
+});
+addEventListener("keyup", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const c = e.key.length === 1 ? e.key.charCodeAt(0) : ({ Escape: 27, Enter: 13, " ": 32,
+    ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Tab: 9, Backspace: 8 })[e.key];
+  if (c !== undefined) x.zicroKey(c, 0);
+});
 </script>
 <script src="e8gpu.js"></script>
 </body>

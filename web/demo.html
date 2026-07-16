@@ -253,16 +253,17 @@ try {
 // and get a slideshow; capping the ratio costs a little sharpness and buys the
 // interaction back. Desktops, which have the cores to spare, keep 2.
 //
-// A render scale below the device ratio was tried here and taken back out. It works
-// — the frame is very nearly linear in pixels (the E8 atlas: 153 ms at 1584×990,
-// 92 ms at half, 58 ms at a quarter) — but this canvas carries the HUD as well as
-// the figure, and the HUD is drawn at FIXED pixel sizes. Shrink the buffer and the
-// status line does not merely soften, it runs off the edge: the text keeps its 16 px
-// while the buffer it is measured against gets smaller. Scaling the scene alone
-// needs an upscaling blit on the Zig side (web.zig blits the scene 1:1 into the
-// window), and would only buy the geometry back — the measurements say the frame is
-// mostly NOT geometry: a 24-point scene costs 100 ms where a 240-point, 6720-edge
-// one costs 153 ms. The cost is per-pixel plumbing and one thread.
+// This caps the WHOLE canvas — HUD included — and so it can only be a coarse ceiling,
+// not the lever for frame rate. Scaling the whole buffer to chase frames was tried and
+// removed: the HUD is drawn at fixed pixel sizes, so a smaller buffer does not merely
+// soften the status line, it runs the text off the edge. The frame-rate lever is the
+// SCENE ALONE, scaled inside the wasm and upscaled on the blit while the HUD stays at
+// full resolution — see zicroSceneScale and the governor below. Measured on the E8
+// atlas, that is 1.43× the frames at 0.7 scale for a modest softening of the figure,
+// and the pick stays exact (the wasm scales the click to match). It is worth doing
+// because the frame is single-threaded here (native render_cpu bands across a pool),
+// and per-pixel bound: a 24-point scene costs nearly what a 240-point, 6720-edge one
+// does, so fewer scene pixels is close to a linear win.
 const DPR_MAX = TOUCH ? 1.5 : 2;
 let dpr = 1;
 function resize() {
@@ -841,13 +842,50 @@ document.getElementById("ed-save").onclick = () => {
     say("restored your saved draft — the editor can discard it");
 })();
 
+// The scene render scale, driven from here. It is SAFE to move only because the
+// wasm scales the figure alone and leaves the HUD at full resolution — the earlier
+// attempt that shrank the whole canvas ran the status text off the edge. `?q=` pins
+// it (q=1 sharp, for a screenshot or a fair A/B); otherwise a governor moves it.
+const pinnedQ = parseFloat(params.get("q"));
+if (pinnedQ > 0 && x.zicroSceneScale) x.zicroSceneScale(pinnedQ);
+
+// The governor watches the MEDIAN of a short window (a median, so one GC hitch does
+// not cost the visitor their sharpness) and steps the scale when the frames are
+// clearly on the wrong side of the budget. The window closes on time as well as on
+// frame count — at one frame a second, "30 frames" is half a minute of waiting, and
+// the page must react to being unusable before the first slide is over.
+const BUDGET_MS = 34;   // ~30 fps: below this, motion is worth more than pixels
+const COMFORT_MS = 20;  // ~50 fps: room to spare, take a pixel back
+let q = pinnedQ > 0 ? pinnedQ : 1;
+let qLog = [], qWindowStart = 0, qLastAdjust = 0;
+function govern(frameMs) {
+  if (pinnedQ > 0 || !x.zicroSceneScale) return;
+  const now = performance.now();
+  if (!qWindowStart) qWindowStart = now;
+  qLog.push(frameMs);
+  const ready = qLog.length >= 30 || (now - qWindowStart > 700 && qLog.length >= 4);
+  if (!ready) return;
+  const med = qLog.slice().sort((a, b) => a - b)[qLog.length >> 1];
+  qLog = []; qWindowStart = now;
+  if (now - qLastAdjust < 900) return;
+  const over = med / BUDGET_MS;
+  let next = q;
+  if (over > 1) next = Math.max(0.35, q - (over > 2.5 ? 0.3 : 0.15));
+  else if (med < COMFORT_MS) next = Math.min(1, q + 0.15);
+  if (Math.abs(next - q) < 0.01) return;
+  q = next; qLastAdjust = now;
+  x.zicroSceneScale(q);
+}
+
 function frame(tMs) {
+  const t0 = performance.now();     // the work is the wasm frame; the JS blit is ~1 ms
   x.zicroFrame(tMs);
   const w = x.zicroWidth(), h = x.zicroHeight();
   if (w > 0 && h > 0) {
     const bytes = new Uint8ClampedArray(mem.buffer, x.zicroPixels(), w * h * 4);
     ctx.putImageData(new ImageData(bytes, w, h), 0, 0);
   }
+  govern(performance.now() - t0);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

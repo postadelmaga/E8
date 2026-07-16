@@ -56,6 +56,20 @@ const Drag = struct {
 var drag: Drag = .{};
 var g_pick: ?[2]f32 = null;
 
+/// Scene render scale, 0..1: the 3D figure is rasterized at this fraction of the
+/// display size and upscaled into place, while the HUD stays at full resolution.
+/// The whole frame is single-threaded here (native `render_cpu` bands across a
+/// pool; a tab has one thread), and it is per-pixel bound — the spheres and the
+/// 6720 edges are filled pixel by pixel — so fewer scene pixels is nearly a linear
+/// win, and it is the ONE saving that does not touch the text: shrinking the whole
+/// buffer ran the status line off the edge, because the HUD is drawn at fixed pixel
+/// sizes. 1.0 is every pixel; the page drives it down only when the frames are not
+/// there. Clamped so a click still lands on the right root (see `frame`).
+var g_scene_scale: f32 = 1.0;
+export fn zicroSceneScale(s: f32) void {
+    g_scene_scale = std.math.clamp(s, 0.35, 1.0);
+}
+
 fn onMouse(_: *zrame.Window, event: zrame.MouseEvent, _: ?*anyopaque) bool {
     switch (event) {
         .motion => |m| {
@@ -425,15 +439,25 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
     const fwd = norm3(.{ -eye[0], -eye[1], -eye[2] });
     const right = norm3(cross3(fwd, .{ 0, 1, 0 }));
     const up = cross3(right, fwd);
-    const focal = @as(f32, @floatFromInt(rh)) * 0.5 / std.math.tan(fovy * 0.5);
-    const cx = @as(f32, @floatFromInt(rw)) * 0.5;
-    const cy = @as(f32, @floatFromInt(rh)) * 0.5;
+    // The scene rasterizes into a buffer `scale` the display size and is upscaled
+    // into the rw×rh slot on the way to the canvas; everything below works in that
+    // smaller space (projection, radii, the pick), so nothing has to know it is not
+    // 1:1 except the one blit that puts it back. `sw`/`sh` are kept at least 2 so the
+    // focal and centre never divide by a degenerate size.
+    const scale = std.math.clamp(g_scene_scale, 0.35, 1.0);
+    const sw: u32 = @max(2, @as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(rw)) * scale))));
+    const sh: u32 = @max(2, @as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(rh)) * scale))));
+
+    const focal = @as(f32, @floatFromInt(sh)) * 0.5 / std.math.tan(fovy * 0.5);
+    const cx = @as(f32, @floatFromInt(sw)) * 0.5;
+    const cy = @as(f32, @floatFromInt(sh)) * 0.5;
 
     // The scene is blitted at this origin, so a click in canvas space has to be
-    // measured from it or the pick would land on a different root.
+    // measured from it AND scaled into the render buffer, or the pick would land on
+    // a different root than the one the finger is over.
     const ox: f32 = @floatFromInt(content.x + (content.w -| g_app.reserve_w -| rw) / 2);
     const oy: f32 = @floatFromInt(content.y + 78);
-    if (g_app.pick) |xy| g_app.pick = .{ xy[0] - ox, xy[1] - oy };
+    if (g_app.pick) |xy| g_app.pick = .{ (xy[0] - ox) * scale, (xy[1] - oy) * scale };
 
     for (g_app.p3, 0..) |p, i| {
         const rel = [3]f32{ p[0] - eye[0], p[1] - eye[1], p[2] - eye[2] };
@@ -455,7 +479,7 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
     for (0..n_pts) |i| g_app.visuals[i] = app_mod.rootVisual(&g_app, i);
     const pairs = app_mod.edgePairs(&g_app);
 
-    g_cpu.ensure(rw, rh) catch return;
+    g_cpu.ensure(sw, sh) catch return;
     g_cpu.clear();
     var n_jobs: usize = 0;
     for (pairs) |ed| {
@@ -510,8 +534,11 @@ fn draw(canvas: *zrame.Canvas, content: zrame.Rect, user: ?*anyopaque) void {
     }
     g_cpu.drawDots(g_dot_jobs[0..n_dots]);
 
-    // The frame goes straight onto the browser's canvas, under the HUD.
-    canvas.blitRgba(@intFromFloat(ox), @intFromFloat(oy), g_cpu.fb, rw, rh, .{});
+    // Upscale the sw×sh scene into the full rw×rh slot on the way to the canvas
+    // (a plain nearest blit — the scene is opaque, so there is nothing to blend),
+    // then the HUD lands on top at full resolution. When scale == 1 this is the
+    // identity and costs the same as the old 1:1 blit.
+    canvas.blitImage(@intFromFloat(ox), @intFromFloat(oy), rw, rh, g_cpu.fb, sw, sh);
     hud_mod.Hud.onDraw(canvas, content, hud);
 
     // The status line, at the same half-second the native build uses.

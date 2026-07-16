@@ -27,7 +27,7 @@
 </head>
 <body>
 <canvas id="e8"></canvas>
-<div id="hud"><span id="fps">—</span> · 240 roots + 6720 edges · 2 instanced draws · WebGPU</div>
+<div id="hud"><span id="fps">—</span> · 240 roots + 6720 edges · 2 instanced draws · <span id="dev">…</span></div>
 <div id="top"><a href="../">‹ All demos</a></div>
 <div id="hint">drag to orbit · scroll to zoom</div>
 <div id="boot">starting the GPU…</div>
@@ -39,19 +39,17 @@ const boot = document.getElementById("boot");
 const cv = document.getElementById("e8");
 const hint = document.getElementById("hint");
 
-// WebGPU or nothing: the instanced mesh path has no WebGL2 twin yet (Zengine #88).
-if (!navigator.gpu) {
-  boot.className = "bad";
-  boot.innerHTML = "This browser has no <b>WebGPU</b>.<br><br>" +
-    "The GPU path needs it — the instanced mesh seam has no WebGL2 fallback yet.<br>" +
-    "On Linux Chrome: <code>chrome://flags/#enable-unsafe-webgpu</code> + <code>#enable-vulkan</code>.<br><br>" +
-    "<a href='../demo.html?d=lisi'>Open the software build instead →</a>";
-  throw new Error("no WebGPU");
-}
+// No WebGPU gate any more. `navigator.gpu` existing proves nothing — this laptop's
+// Chrome has it and still answers requestAdapter with null — and refusing on that
+// check hid the scene from the machines that could have drawn it via WebGL2. The wasm
+// asks the adapter four times and falls to the twin (Zengine #88, follow-up 3), so the
+// page just boots and lets it report which device it landed on.
+const forceGl = new URLSearchParams(location.search).get("force") === "gl";
 
 var Module = {
   onRuntimeInitialized() {
     resize();
+    if (forceGl && Module._ze_force_gl) Module._ze_force_gl();
     Module._ze_boot();
     // _ze_boot is async underneath (adapter → device): poll for the error string
     // rather than assume it came up.
@@ -59,7 +57,14 @@ var Module = {
     const check = () => {
       const e = Module.UTF8ToString(Module._ze_error());
       if (e) { boot.className = "bad"; boot.textContent = e; return; }
-      if (Module._ze_frames() > 0) { boot.style.display = "none"; return; }
+      if (Module._ze_frames() > 0) {
+        boot.style.display = "none";
+        // Name the device that actually drew, not the one we hoped for.
+        const b = Module._ze_backend();
+        document.getElementById("dev").textContent =
+          b === 2 ? "WebGPU" : b === 1 ? "WebGL2 (twin)" : "—";
+        return;
+      }
       if (++tries > 200) { boot.className = "bad"; boot.textContent = "the GPU never drew a frame"; return; }
       setTimeout(check, 50);
     };

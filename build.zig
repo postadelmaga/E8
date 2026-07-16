@@ -376,6 +376,24 @@ pub fn build(b: *std.Build) void {
                 naga.addFileArg(spv);
                 const wgsl = naga.addOutputFileArg(s.import ++ ".wgsl");
                 ze_wgpu.addAnonymousImport(s.import ++ "_wgsl", .{ .root_source_file = wgsl });
+
+                // The same SPIR-V again, as GLSL ES 300, for the WebGL2 twin
+                // (`gles_mesh.zig`, issue #88 follow-up 3) — which @embedFiles it exactly
+                // as `rhi_wgpu.zig` @embedFiles the WGSL, so the consumer owes it too.
+                //
+                // WITHOUT --keep-coordinate-space, and that is the whole trick: this path
+                // is one pass straight onto framebuffer 0, so naga's standard adjustment
+                // (y-flip + z from [0,w] to [-w,w]) is exactly what the canvas wants —
+                // which is why `viewProj` can stay WebGPU clip space and feed BOTH.
+                //
+                // The extension is load-bearing: naga picks its output format from it,
+                // and answers an unknown one by printing a line and exiting ZERO — so
+                // `.glsl` here produces no file and no error, and the build only trips
+                // later on a missing @embedFile. Hence .vert/.frag, per stage.
+                const naga_gl = b.addSystemCommand(&.{ "naga", "--profile", "es300" });
+                naga_gl.addFileArg(spv);
+                const gles = naga_gl.addOutputFileArg(s.import ++ (if (std.mem.eql(u8, s.stage, "vertex")) ".vert" else ".frag"));
+                ze_wgpu.addAnonymousImport(s.import ++ "_gles", .{ .root_source_file = gles });
             }
 
             const gpu_mod = em.make(b.path("src/web_gpu.zig"));
@@ -387,9 +405,15 @@ pub fn build(b: *std.Build) void {
             link.addFileArg(gpu_lib.getEmittedBin());
             link.addArgs(&.{
                 "--use-port=emdawnwebgpu", // the WebGPU JS bindings answering webgpu.h
+                // The twin's half of the link: emscripten's GL-on-WebGL2 JS library.
+                // Both devices are linked in and the wasm picks at runtime — a browser
+                // whose `requestAdapter` answers null still has a GPU path.
+                "-lGL",
+                "-sMIN_WEBGL_VERSION=2",
+                "-sMAX_WEBGL_VERSION=2",
                 "-sENVIRONMENT=web",
                 "-sALLOW_MEMORY_GROWTH=1",
-                "-sEXPORTED_FUNCTIONS=_ze_boot,_ze_look,_ze_dolly,_ze_resize,_ze_frames,_ze_ms,_ze_error,_malloc,_free",
+                "-sEXPORTED_FUNCTIONS=_ze_boot,_ze_look,_ze_dolly,_ze_resize,_ze_frames,_ze_ms,_ze_error,_ze_backend,_ze_force_gl,_malloc,_free",
                 "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString",
                 "-sINVOKE_RUN=0", // no main: the page calls _ze_boot
                 "-sEXIT_RUNTIME=0",

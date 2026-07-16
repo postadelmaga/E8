@@ -13,22 +13,31 @@
 //! goes out as TWO instanced draws. Not 6960 draws: that is the difference the seam
 //! was built for.
 //!
-//! THE E8 IS THE REAL ONE. Nothing here re-derives the polytope. `demos/lisi/e8.zig`
-//! is dependency-free (std only) and already carries the tested truth — `generate()`
-//! for the 240 roots, `buildEdges` for the 6720 pairs at ⟨a,b⟩ = 1, `coxeterBasis()`
-//! for the iconic 30-fold projection, `rootRgb` for Lisi's own class palette. This
-//! file is a renderer, not a second opinion; if the counts ever disagree with the unit
-//! tests, the tests are right.
+//! TWO BACKENDS, ONE SCENE — and this is not symmetry for its own sake. A Chrome that
+//! reports `navigator.gpu` can still answer `requestAdapter` with null (this laptop's
+//! does), and then WebGPU-or-nothing means nothing: zero frames, an apology, and the
+//! whole point invisible on the machine it was written for. So the adapter chain asks
+//! four times, and when it runs out the scene lands on the WebGL2 twin
+//! (`ze_wgpu.gles_mesh`, issue #88 follow-up 3) instead of giving up.
 //!
-//! WHAT IS NOT HERE YET. The HUD (it is drawn at fixed pixel sizes into the software
-//! canvas, and belongs on a 2D canvas stacked over this one), the plugins, the deck.
-//! This is the scene, proven on the GPU, and the seam it proves is the one the rest
-//! will ride in on.
+//! The two share everything that is not the device: one geometry generator, one orbit,
+//! one clock. `InstancedDraw` and `InstPush` are field-for-field identical across the
+//! backends (the twin redeclares them so it need not import webgpu.h), and `viewProj`
+//! stays WebGPU clip space for BOTH — the es300 shaders are emitted without
+//! --keep-coordinate-space, so naga's own adjustment converts z and flips y. See
+//! build.zig's `web-gpu` step, which owes the twin its shaders exactly as it owes
+//! `rhi_wgpu` the WGSL.
+//!
+//! WHAT IS NOT HERE YET: the HUD, the plugins and the deck — this path draws the figure,
+//! not the tool. Those live in `app.zig` and belong to `web.zig`'s window, and the way
+//! to reach them is one file with the rasterizer chosen at comptime, not a second copy
+//! of the harness here. Until then this is an honest preview of the figure alone.
 
 const std = @import("std");
 const zw = @import("zicro_wgpu");
 const backend = @import("ze_wgpu");
-const e8 = @import("demos/lisi/e8.zig");
+const e8 = @import("demos/lisi/e8.zig"); // the roots, the edges, the projection, tested
+const gm = backend.gles_mesh; // the WebGL2 twin — `struct {}` off-emscripten
 
 const c = zw.c;
 const Gpu = backend.Gpu;
@@ -81,6 +90,51 @@ pub const panic = std.debug.FullPanic(struct {
 var g_heap: [1 << 24]u8 = undefined;
 var g_fba = std.heap.FixedBufferAllocator.init(&g_heap);
 
+/// One instanced draw, in neither backend's dialect. Both declare this shape with these
+/// exact fields; keeping our own means the geometry is built once and `run` hands it to
+/// whichever device answered, with no branch in the builder.
+const Draw = struct {
+    first_vertex: u32,
+    vertex_count: u32,
+    first_instance: u32,
+    instance_count: u32,
+};
+
+/// The atlas as bytes: the base meshes, the per-instance stream, and how to draw them.
+/// No device in sight — this is what both backends are handed.
+const Geom = struct {
+    verts: []const u8,
+    insts: []const u8,
+    draws: [2]Draw,
+};
+
+/// `Draw` in a backend's own type. Field-for-field, checked by the compiler at each use.
+fn drawsAs(comptime T: type, d: [2]Draw) [2]T {
+    var out: [2]T = undefined;
+    for (d, 0..) |x, i| out[i] = .{
+        .first_vertex = x.first_vertex,
+        .vertex_count = x.vertex_count,
+        .first_instance = x.first_instance,
+        .instance_count = x.instance_count,
+    };
+    return out;
+}
+
+/// The camera and the clock, OUTSIDE the backend: whichever device draws, it is the same
+/// orbit, and `ze_ms` means the same thing — so the two paths stay comparable.
+const Cam = struct {
+    width: u32 = 1280,
+    height: u32 = 720,
+    yaw: f32 = 0.65,
+    pitch: f32 = 0.35,
+    dist: f32 = 4.2,
+    frames: u64 = 0,
+    ema_ms: f32 = 16.0,
+    last: f64 = 0,
+};
+var g_cam: Cam = .{};
+var g_geom: ?Geom = null;
+
 const Scene = struct {
     vbuf: c.WGPUBuffer,
     ibuf: c.WGPUBuffer,
@@ -93,17 +147,12 @@ const App = struct {
     format: c.WGPUTextureFormat,
     mp: backend.MeshPresent,
     scene: Scene,
-    width: u32,
-    height: u32,
-    yaw: f32 = 0.65,
-    pitch: f32 = 0.35,
-    dist: f32 = 4.2,
-    frames: u64 = 0,
-    ema_ms: f32 = 16.0,
-    last: f64 = 0,
 };
 
 var g_app: ?App = null;
+/// The twin's state — null until the adapter chain runs out and lands here.
+var g_gl: ?gm.MeshPresent = null;
+var g_gl_draws: [2]gm.InstancedDraw = undefined;
 var g_instance: c.WGPUInstance = null;
 var g_surface: c.WGPUSurface = null;
 var g_adapter: c.WGPUAdapter = null;
@@ -125,10 +174,17 @@ export fn ze_error() [*c]const u8 {
     return &g_err;
 }
 export fn ze_frames() f64 {
-    return @floatFromInt(if (g_app) |a| a.frames else 0);
+    return @floatFromInt(g_cam.frames);
+}
+/// Which device is drawing: 2 = WebGPU, 1 = the WebGL2 twin, 0 = neither, yet. The page
+/// says so out loud — "WebGPU" over a frame the twin drew would be a readout that lies.
+export fn ze_backend() f64 {
+    if (g_app != null) return 2;
+    if (g_gl != null) return 1;
+    return 0;
 }
 export fn ze_ms() f64 {
-    return if (g_app) |a| a.ema_ms else 0;
+    return g_cam.ema_ms;
 }
 
 // --- the meshes ----------------------------------------------------------------------
@@ -204,9 +260,14 @@ fn quadN(verts: *std.ArrayList(f32), gpa: std.mem.Allocator, a: [3]f32, b: [3]f3
 
 // --- the scene -----------------------------------------------------------------------
 
-fn buildScene(gpu: *backend.Gpu, gpa: std.mem.Allocator) !Scene {
+/// The atlas, as bytes, with no device involved — so the WebGPU path and the twin get
+/// the SAME 240 roots and 6720 edges, from the same tested module, and a bug can never
+/// be "only on the fallback".
+///
+/// The arrays are not freed: they outlive this call because the twin uploads on init and
+/// a context loss would want them again. 6960 × 64 B ≈ 435 KB of the 16 MB heap.
+fn buildGeometry(gpa: std.mem.Allocator) !Geom {
     var verts: std.ArrayList(f32) = .empty;
-    defer verts.deinit(gpa);
     const m = try buildMeshes(&verts, gpa);
 
     // The real thing: the tested module's roots, edges, projection and palette.
@@ -222,7 +283,6 @@ fn buildScene(gpu: *backend.Gpu, gpa: std.mem.Allocator) !Scene {
     for (&roots, 0..) |*r, i| pos[i] = e8.project(&basis, r.v);
 
     var insts: std.ArrayList(Instance) = .empty;
-    defer insts.deinit(gpa);
 
     // Roots first: `draws[0]` is the sphere run, so its instances lead the buffer.
     for (&roots, 0..) |*r, i| {
@@ -243,8 +303,8 @@ fn buildScene(gpu: *backend.Gpu, gpa: std.mem.Allocator) !Scene {
     const n_tube: u32 = @as(u32, @intCast(insts.items.len)) - n_sphere;
 
     return .{
-        .vbuf = gpu.vertexBuffer(std.mem.sliceAsBytes(verts.items)),
-        .ibuf = gpu.vertexBuffer(std.mem.sliceAsBytes(insts.items)),
+        .verts = std.mem.sliceAsBytes(verts.items),
+        .insts = std.mem.sliceAsBytes(insts.items),
         .draws = .{
             .{ .first_vertex = 0, .vertex_count = m.sphere, .first_instance = 0, .instance_count = n_sphere },
             .{ .first_vertex = m.tube_first, .vertex_count = m.tube, .first_instance = n_sphere, .instance_count = n_tube },
@@ -252,11 +312,27 @@ fn buildScene(gpu: *backend.Gpu, gpa: std.mem.Allocator) !Scene {
     };
 }
 
+/// The geometry, built once and kept: both backends ask for it, and on this path only
+/// one of them will ever get it.
+fn geometry() !*const Geom {
+    if (g_geom == null) g_geom = try buildGeometry(g_fba.allocator());
+    return &g_geom.?;
+}
+
 // --- boot ----------------------------------------------------------------------------
 
+/// `?force=gl` on the page. The twin is the path most visitors will actually get, so it
+/// has to be reachable on a machine whose adapter answers — otherwise it is only ever
+/// tested where it cannot be watched.
+var g_force_gl: bool = false;
+export fn ze_force_gl() void {
+    g_force_gl = true;
+}
+
 export fn ze_boot() void {
-    g_instance = c.wgpuCreateInstance(null) orelse
-        return fail("this browser has no WebGPU — the instanced mesh path has no WebGL2 twin (Zengine issue #88, follow-up 3)");
+    if (g_force_gl) return startGl();
+    // No WebGPU at all in this browser: straight to the twin, no apology.
+    g_instance = c.wgpuCreateInstance(null) orelse return startGl();
     const opts = c.WGPURequestAdapterOptions{ .powerPreference = c.WGPUPowerPreference_HighPerformance };
     _ = c.wgpuInstanceRequestAdapter(g_instance, &opts, .{
         .mode = c.WGPUCallbackMode_AllowSpontaneous,
@@ -279,7 +355,9 @@ fn onAdapter(status: c.WGPURequestAdapterStatus, adapter: c.WGPUAdapter, _: c.WG
             _ = c.wgpuInstanceRequestAdapter(g_instance, &o, .{ .mode = c.WGPUCallbackMode_AllowSpontaneous, .callback = onAdapter });
             return;
         }
-        return fail("no WebGPU adapter would answer — on Linux try chrome://flags/#enable-unsafe-webgpu and #enable-vulkan");
+        // Asked four times, answered null four times. That is not the end of the road:
+        // this browser still has WebGL2, and the twin draws the same atlas through it.
+        return startGl();
     }
     g_adapter = adapter;
     const desc = c.WGPUDeviceDescriptor{
@@ -301,8 +379,33 @@ fn onGpuError(_: [*c]const ?*c.struct_WGPUDeviceImpl, kind: c.WGPUErrorType, msg
     std.log.err("wgpu error {d}: {s}", .{ kind, text });
 }
 
+/// The WebGL2 twin: the same atlas, the same two instanced draws, no adapter needed.
+/// Synchronous, unlike the WebGPU chain above — there is nothing to await.
+fn startGl() void {
+    const g = geometry() catch |e| {
+        var buf: [128]u8 = undefined;
+        return fail(std.fmt.bufPrint(&buf, "the atlas did not build: {s}", .{@errorName(e)}) catch "the atlas did not build");
+    };
+
+    const w = if (g_pending_w != 0) g_pending_w else g_cam.width;
+    const h = if (g_pending_h != 0) g_pending_h else g_cam.height;
+
+    var mp = gm.MeshPresent.init(canvas, w, h) catch
+        return fail("no WebGPU adapter would answer, and WebGL2 refused a context too — this browser has no GPU path at all");
+
+    mp.vertexData(g.verts);
+    mp.instanceData(g.insts);
+    g_gl_draws = drawsAs(gm.InstancedDraw, g.draws);
+    g_gl = mp;
+
+    g_cam.width = w;
+    g_cam.height = h;
+    g_cam.last = emscripten_get_now();
+    std.log.info("E8 on the GPU: no WebGPU adapter — the WebGL2 twin has it, {d}x{d}", .{ w, h });
+    emscripten_set_main_loop(frame, 0, 0);
+}
+
 fn start(device: c.WGPUDevice) !void {
-    const gpa = g_fba.allocator();
     const queue = c.wgpuDeviceGetQueue(device).?;
 
     g_surface = zw.surfaceFromCanvas(g_instance, canvas) catch return fail("no surface — the canvas is not there");
@@ -310,8 +413,8 @@ fn start(device: c.WGPUDevice) !void {
     _ = c.wgpuSurfaceGetCapabilities(g_surface, g_adapter, &caps);
     const format = if (caps.formatCount > 0) caps.formats[0] else c.WGPUTextureFormat_BGRA8Unorm;
 
-    const w = if (g_pending_w != 0) g_pending_w else 1280;
-    const h = if (g_pending_h != 0) g_pending_h else 720;
+    const w = if (g_pending_w != 0) g_pending_w else g_cam.width;
+    const h = if (g_pending_h != 0) g_pending_h else g_cam.height;
 
     g_app = .{
         .gpu = .{ .dev = .{
@@ -325,14 +428,20 @@ fn start(device: c.WGPUDevice) !void {
         .format = format,
         .mp = undefined,
         .scene = undefined,
-        .width = w,
-        .height = h,
-        .last = emscripten_get_now(),
     };
     const a = &g_app.?;
+    g_cam.width = w;
+    g_cam.height = h;
+    g_cam.last = emscripten_get_now();
     configure(a, w, h);
     a.mp = try backend.MeshPresent.init(&a.gpu, format, w, h);
-    a.scene = try buildScene(&a.gpu, gpa);
+
+    const g = try geometry();
+    a.scene = .{
+        .vbuf = a.gpu.vertexBuffer(g.verts),
+        .ibuf = a.gpu.vertexBuffer(g.insts),
+        .draws = drawsAs(backend.InstancedDraw, g.draws),
+    };
     std.log.info("E8 on the GPU: 240 roots + 6720 edges in 2 instanced draws, {d}x{d}", .{ w, h });
     emscripten_set_main_loop(frame, 0, 0);
 }
@@ -352,38 +461,49 @@ fn configure(a: *App, w: u32, h: u32) void {
 export fn ze_resize(w: f64, h: f64) void {
     const iw: u32 = @intFromFloat(@max(w, 1));
     const ih: u32 = @intFromFloat(@max(h, 1));
-    const a = &(g_app orelse {
+    // Before either backend is up, remember it: the device is asked for this size when
+    // it arrives, so a resize during the adapter chain is not lost.
+    if (g_app == null and g_gl == null) {
         g_pending_w = iw;
         g_pending_h = ih;
         return;
-    });
-    if (a.width == iw and a.height == ih) return;
-    a.width = iw;
-    a.height = ih;
-    configure(a, iw, ih);
-    a.mp.resize(iw, ih) catch |e| std.log.err("resize: {s}", .{@errorName(e)});
+    }
+    if (g_cam.width == iw and g_cam.height == ih) return;
+    g_cam.width = iw;
+    g_cam.height = ih;
+    if (g_app) |*a| {
+        configure(a, iw, ih);
+        a.mp.resize(iw, ih) catch |e| std.log.err("resize: {s}", .{@errorName(e)});
+    }
+    if (g_gl) |*gl| gl.resize(iw, ih);
 }
 
 export fn ze_look(dyaw: f64, dpitch: f64) void {
-    const a = &(g_app orelse return);
-    a.yaw += @floatCast(dyaw);
-    a.pitch = std.math.clamp(a.pitch + @as(f32, @floatCast(dpitch)), -1.45, 1.45);
+    g_cam.yaw += @floatCast(dyaw);
+    g_cam.pitch = std.math.clamp(g_cam.pitch + @as(f32, @floatCast(dpitch)), -1.45, 1.45);
 }
 
 export fn ze_dolly(dz: f64) void {
-    const a = &(g_app orelse return);
-    a.dist = std.math.clamp(a.dist * (1.0 + @as(f32, @floatCast(dz))), 1.4, 14.0);
+    g_cam.dist = std.math.clamp(g_cam.dist * (1.0 + @as(f32, @floatCast(dz))), 1.4, 14.0);
 }
 
 // --- the frame -----------------------------------------------------------------------
 
 fn frame() callconv(.c) void {
-    const a = &(g_app orelse return);
     const now = emscripten_get_now();
-    const dt: f32 = @floatCast(now - a.last);
-    a.last = now;
-    a.ema_ms = a.ema_ms * 0.9 + dt * 0.1;
+    const dt: f32 = @floatCast(now - g_cam.last);
+    g_cam.last = now;
+    g_cam.ema_ms = g_cam.ema_ms * 0.9 + dt * 0.1;
 
+    const vp = viewProj(&g_cam);
+
+    if (g_gl) |*gl| {
+        gl.render(&g_gl_draws, .{ .view_proj = vp }, .{ 0, 0, 0, 1 });
+        g_cam.frames += 1;
+        return;
+    }
+
+    const a = &(g_app orelse return);
     var st: c.WGPUSurfaceTexture = .{};
     c.wgpuSurfaceGetCurrentTexture(a.surface, &st);
     if (st.texture == null) return;
@@ -391,15 +511,15 @@ fn frame() callconv(.c) void {
     defer c.wgpuTextureViewRelease(view);
 
     a.mp.render(view, a.scene.vbuf, a.scene.ibuf, &a.scene.draws, .{
-        .view_proj = viewProj(a),
+        .view_proj = vp,
     }, .{ 0, 0, 0, 1 });
 
     // No present call: on the web the compositor takes the canvas when this returns.
-    a.frames += 1;
+    g_cam.frames += 1;
 }
 
 /// Orbit camera → view·projection, column-major, the way the seam's push block wants it.
-fn viewProj(a: *const App) [16]f32 {
+fn viewProj(a: *const Cam) [16]f32 {
     const eye = [3]f32{
         a.dist * @cos(a.pitch) * @cos(a.yaw),
         a.dist * @sin(a.pitch),
@@ -419,6 +539,12 @@ fn viewProj(a: *const App) [16]f32 {
     const tx = -dot(s, eye);
     const ty = -dot(u, eye);
     const tz = dot(f, eye);
+    // `w` must come out as +t, the distance along the forward axis: the perspective
+    // divide is z/w, and the z below is built assuming exactly that. Signing this row
+    // the other way makes w = -t — negative for everything IN FRONT of the camera, so
+    // the whole atlas clips away and the canvas stays black at a confident 60 fps.
+    // (Which is what it did: this path had never actually been watched on a machine
+    // whose adapter answers, so the sign survived a "working" WebGPU build.)
 
     // proj · view, WebGPU clip space (z ∈ [0,1])
     const p0 = t / aspect;
@@ -427,10 +553,10 @@ fn viewProj(a: *const App) [16]f32 {
     const p3 = (far * near) / (near - far);
 
     return .{
-        p0 * s[0], p1 * u[0], p2 * -f[0], -f[0],
-        p0 * s[1], p1 * u[1], p2 * -f[1], -f[1],
-        p0 * s[2], p1 * u[2], p2 * -f[2], -f[2],
-        p0 * tx,   p1 * ty,   p2 * tz + p3, tz,
+        p0 * s[0], p1 * u[0], p2 * -f[0], f[0],
+        p0 * s[1], p1 * u[1], p2 * -f[1], f[1],
+        p0 * s[2], p1 * u[2], p2 * -f[2], f[2],
+        p0 * tx,   p1 * ty,   p2 * tz + p3, -tz,
     };
 }
 

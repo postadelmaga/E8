@@ -219,13 +219,11 @@
 <footer>
   <div>Source: <a href="https://github.com/postadelmaga/E8" target="_blank" rel="noopener">E8</a> ·
     <a href="https://github.com/postadelmaga/Zengine" target="_blank" rel="noopener">Zengine</a> ·
-    <a href="https://github.com/postadelmaga/Zrame" target="_blank" rel="noopener">Zrame</a> — Zig, no engine under the browser: the figure is rasterized in software, the same code the native build runs.</div>
+    <a href="https://github.com/postadelmaga/Zrame" target="_blank" rel="noopener">Zrame</a> — Zig, the same code the native build runs: the figure goes to <b>WebGPU</b> (or its WebGL2 twin) as two instanced draws, and falls back to the software rasterizer where a tab has neither.</div>
   <div class="keys"><kbd>P</kbd> journey · <kbd>H</kbd> every key · <kbd>O</kbd> deck editor · <kbd>F</kbd> fullscreen · drag to orbit · on a phone: tap to turn the page, pinch to zoom.</div>
-  <!-- Named a preview because it is one: the scene, and nothing else yet. Better to say
-       so here than to let someone find the missing half on their own. -->
-  <div class="lab">Lab: <a href="gpu/">the E8 atlas on the GPU</a> — the same 240 roots and 6720 edges
-    handed to <b>WebGPU</b> as two instanced draws instead of rasterized on the one thread a tab has.
-    A preview: the figure only, no panel and no journey yet. Needs a browser with WebGPU.</div>
+  <div class="lab">Lab: <a href="gpu/">the bare GPU page</a> — the same tool without the fallback,
+    for watching which device answers (<code>?d=&lt;demo&gt;</code>, <code>?force=gl</code> for the twin).
+    Every card above already tries the GPU first; <code>?sw=1</code> pins the software rasterizer.</div>
 </footer>
 
 <!-- Umami, self-hosted on the same server: who opens a paper, and which one. No

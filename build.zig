@@ -110,8 +110,8 @@ pub fn build(b: *std.Build) void {
     // string. The heavy modules — zengine, zrame, the compiled shaders — are shared,
     // so what is repeated is src/main.zig and the plugins, not the engine.
     const demos = [_][]const u8{
-        "lisi",     "mtheory", "polytope", "molecule", "data",
-        "embed",    "chem",    "graph",    "astro",
+        "lisi",  "mtheory", "polytope", "molecule", "data",
+        "embed", "chem",    "graph",    "astro",
     };
 
     const zrame_mod = zrame_dep.module("zrame");
@@ -369,61 +369,69 @@ pub fn build(b: *std.Build) void {
             const zrame_em = em.make(zrame_dep.builder.path("src/web_root.zig"));
             zrame_em.addImport("zicro", zicro_em);
 
-            const gpu_opt = b.addOptions();
-            gpu_opt.addOption([]const u8, "demo", "lisi");
+            const zengine_em = em.make(b.path("src/zengine_web.zig"));
 
-            const gpu_mod = em.make(b.path("src/web.zig"));
-            gpu_mod.addImport("zrame", zrame_em);
-            gpu_mod.addImport("zengine", em.make(b.path("src/zengine_web.zig")));
-            gpu_mod.addImport("build_options", gpu_opt.createModule());
-            gpu_mod.addImport("scene_gpu", scene_gpu);
+            // ONE WASM PER DEMO, like the software build above and for the same
+            // reason: the domain is a comptime seam. The heavy modules — the GPU
+            // rasterizer, zicro, zrame — are shared; what repeats is web.zig and
+            // the plugins, plus one emcc link each.
+            for (demos) |name| {
+                const gpu_opt = b.addOptions();
+                gpu_opt.addOption([]const u8, "demo", name);
 
-            const gpu_lib = b.addLibrary(.{ .name = "e8gpu", .linkage = .static, .root_module = gpu_mod });
-            const link = b.addSystemCommand(&.{emcc_path});
-            link.addFileArg(gpu_lib.getEmittedBin());
-            link.addArgs(&.{
-                "--use-port=emdawnwebgpu", // the WebGPU JS bindings answering webgpu.h
-                // The twin's half of the link: emscripten's GL-on-WebGL2 JS library.
-                // Both devices are linked in and the wasm picks at runtime — a browser
-                // whose `requestAdapter` answers null still has a GPU path.
-                "-lGL",
-                "-sMIN_WEBGL_VERSION=2",
-                "-sMAX_WEBGL_VERSION=2",
-                "-sENVIRONMENT=web",
-                // A fixed heap, cut once and large enough. NOT growth: when the heap
-                // grows, wasm hands back a NEW ArrayBuffer and every view the page holds
-                // — the pixels it blits, the scene rect it reads — is detached and throws
-                // on the next frame. The page would have to re-derive its views each tick
-                // and would still race the growth that happened mid-frame. 256 MB costs
-                // nothing until touched and removes the whole class.
-                "-sINITIAL_MEMORY=268435456",
-                "-sALLOW_MEMORY_GROWTH=0",
-                // The tool's whole ABI: zicro's window seam (frame, input, the pixel
-                // buffer) plus web.zig's own. emcc strips what is not named here, and a
-                // missing name is a page that boots into a dead canvas — so this list is
-                // the two `export fn` sets, not a guess.
-                "-sEXPORTED_FUNCTIONS=" ++
-                    "_zicroFrame,_zicroPixels,_zicroResize,_zicroKey,_zicroPointerMove," ++
-                    "_zicroPointerButton,_zicroScroll,_zicroSetTouch,_zicroTouch," ++
-                    "_zicroWidth,_zicroHeight," ++
-                    "_zicroBoot,_zicroTap,_zicroCamera,_zicroOptions,_zicroOptionsLen," ++
-                    "_zicroSceneScale,_zicroSceneRect,_zicroSceneDevice,_zicroForceGl," ++
-                    "_zicroOpenFile,_zicroFileBuffer,_zicroFileName,_zicroAddImage," ++
-                    "_zicroDeckBuffer,_zicroDeckZon,_zicroDeckZonLen,_zicroApplyDeck," ++
-                    "_malloc,_free",
-                // HEAPU8 is not on `Module` unless it is named here, and without it the
-                // page cannot reach the pixels the software canvas paints — the frame
-                // loop throws on its first tick and the tab goes quiet.
-                "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
-                "-sINVOKE_RUN=0", // no main: the page calls _ze_boot
-                "-sEXIT_RUNTIME=0",
-                "-O3",
-                "-o",
-            });
-            const js = link.addOutputFileArg("e8gpu.js");
-            link.step.dependOn(&gpu_lib.step);
-            gpu_step.dependOn(&b.addInstallFileWithDir(js, .{ .custom = "web/gpu" }, "e8gpu.js").step);
-            gpu_step.dependOn(&b.addInstallFileWithDir(js.dirname().path(b, "e8gpu.wasm"), .{ .custom = "web/gpu" }, "e8gpu.wasm").step);
+                const gpu_mod = em.make(b.path("src/web.zig"));
+                gpu_mod.addImport("zrame", zrame_em);
+                gpu_mod.addImport("zengine", zengine_em);
+                gpu_mod.addImport("build_options", gpu_opt.createModule());
+                gpu_mod.addImport("scene_gpu", scene_gpu);
+
+                const gpu_lib = b.addLibrary(.{ .name = b.fmt("e8gpu-{s}", .{name}), .linkage = .static, .root_module = gpu_mod });
+                const link = b.addSystemCommand(&.{emcc_path});
+                link.addFileArg(gpu_lib.getEmittedBin());
+                link.addArgs(&.{
+                    "--use-port=emdawnwebgpu", // the WebGPU JS bindings answering webgpu.h
+                    // The twin's half of the link: emscripten's GL-on-WebGL2 JS library.
+                    // Both devices are linked in and the wasm picks at runtime — a browser
+                    // whose `requestAdapter` answers null still has a GPU path.
+                    "-lGL",
+                    "-sMIN_WEBGL_VERSION=2",
+                    "-sMAX_WEBGL_VERSION=2",
+                    "-sENVIRONMENT=web",
+                    // A fixed heap, cut once and large enough. NOT growth: when the heap
+                    // grows, wasm hands back a NEW ArrayBuffer and every view the page holds
+                    // — the pixels it blits, the scene rect it reads — is detached and throws
+                    // on the next frame. The page would have to re-derive its views each tick
+                    // and would still race the growth that happened mid-frame. 256 MB costs
+                    // nothing until touched and removes the whole class.
+                    "-sINITIAL_MEMORY=268435456",
+                    "-sALLOW_MEMORY_GROWTH=0",
+                    // The tool's whole ABI: zicro's window seam (frame, input, the pixel
+                    // buffer) plus web.zig's own. emcc strips what is not named here, and a
+                    // missing name is a page that boots into a dead canvas — so this list is
+                    // the two `export fn` sets, not a guess.
+                    "-sEXPORTED_FUNCTIONS=" ++
+                        "_zicroFrame,_zicroPixels,_zicroResize,_zicroKey,_zicroPointerMove," ++
+                        "_zicroPointerButton,_zicroScroll,_zicroSetTouch,_zicroTouch," ++
+                        "_zicroWidth,_zicroHeight," ++
+                        "_zicroBoot,_zicroTap,_zicroCamera,_zicroOptions,_zicroOptionsLen," ++
+                        "_zicroSceneScale,_zicroSceneRect,_zicroSceneDevice,_zicroForceGl," ++
+                        "_zicroOpenFile,_zicroFileBuffer,_zicroFileName,_zicroAddImage," ++
+                        "_zicroDeckBuffer,_zicroDeckZon,_zicroDeckZonLen,_zicroApplyDeck," ++
+                        "_malloc,_free",
+                    // HEAPU8 is not on `Module` unless it is named here, and without it the
+                    // page cannot reach the pixels the software canvas paints — the frame
+                    // loop throws on its first tick and the tab goes quiet.
+                    "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
+                    "-sINVOKE_RUN=0", // no main: the page calls _ze_boot
+                    "-sEXIT_RUNTIME=0",
+                    "-O3",
+                    "-o",
+                });
+                const js = link.addOutputFileArg(b.fmt("e8-{s}.js", .{name}));
+                link.step.dependOn(&gpu_lib.step);
+                gpu_step.dependOn(&b.addInstallFileWithDir(js, .{ .custom = "web/gpu" }, b.fmt("e8-{s}.js", .{name})).step);
+                gpu_step.dependOn(&b.addInstallFileWithDir(js.dirname().path(b, b.fmt("e8-{s}.wasm", .{name})), .{ .custom = "web/gpu" }, b.fmt("e8-{s}.wasm", .{name})).step);
+            }
             gpu_step.dependOn(&b.addInstallFileWithDir(b.path("web/gpu.html"), .{ .custom = "web/gpu" }, "index.html").step);
         } else {
             // Not an error: the CPU web build is the one that always works, and a

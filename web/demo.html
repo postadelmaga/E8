@@ -8,7 +8,12 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2307080c'/%3E%3Cg fill='%237fb2ff'%3E%3Ccircle cx='16' cy='6.5' r='2.2'/%3E%3Ccircle cx='22.7' cy='9.3' r='2.2'/%3E%3Ccircle cx='25.5' cy='16' r='2.2'/%3E%3Ccircle cx='22.7' cy='22.7' r='2.2'/%3E%3Ccircle cx='16' cy='25.5' r='2.2'/%3E%3Ccircle cx='9.3' cy='22.7' r='2.2'/%3E%3Ccircle cx='6.5' cy='16' r='2.2'/%3E%3Ccircle cx='9.3' cy='9.3' r='2.2'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='2.6' fill='%23f0e2aa'/%3E%3C/svg%3E" />
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; overscroll-behavior: none; }
-  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; outline: none; }
+  #c { position: fixed; inset: 0; z-index: 1; display: block; width: 100vw; height: 100vh; touch-action: none; outline: none; }
+  /* The figure's canvas, when a GPU answers: it sits UNDER the software canvas, which
+     then paints only the HUD over a transparent glass. JS lays it each frame exactly
+     over the slot the software rasterizer would have blitted into. */
+  #e8gpu { position: fixed; left: 0; top: 0; z-index: 0; display: none; background: #000; }
+  #dev { font: 12px ui-monospace, monospace; color: #78e6a0; }
   #err { position: fixed; inset: 0; display: none; place-content: center; color: #f78; font: 14px monospace; padding: 2rem; white-space: pre-wrap; }
   #load { position: fixed; inset: 0; display: grid; place-content: center; color: #8fa3c4; font: 15px system-ui, sans-serif; }
 
@@ -141,8 +146,10 @@
 </style>
 </head>
 <body>
+<canvas id="e8gpu"></canvas>
 <canvas id="c" tabindex="0"></canvas>
 <div id="top">
+  <span id="dev"></span>
   <span id="src">
     <a href="https://github.com/postadelmaga/E8" target="_blank" rel="noopener">E8</a>
     <a href="https://github.com/postadelmaga/Zengine" target="_blank" rel="noopener">Zengine</a>
@@ -215,7 +222,6 @@ const TITLES = { lisi: "E8 — Lisi's atlas", mtheory: "E10 — beyond E8", poly
 document.title = `${TITLES[demo]} — an interactive paper`;
 
 const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d", { alpha: false });
 const errEl = document.getElementById("err");
 const loadEl = document.getElementById("load");
 loadEl.textContent = `loading ${TITLES[demo]}…`;
@@ -229,23 +235,94 @@ hint.innerHTML = TOUCH
   ? "<b>Tap</b> to turn the page · drag to orbit · pinch to zoom · tap a point to inspect it"
   : "Press <b>P</b> to start the paper · <b>H</b> for every key · drag to orbit, click a point";
 
-let x, mem;
-try {
-  // Streaming first; if the server mislabels the MIME type (a plain file server
-  // often does), fall back to the buffered path instead of failing the page.
-  const url = `wasm/e8-${demo}.wasm`;
-  let instance;
+// --- boot: the GPU first, the software rasterizer as the answer that always works ----
+// The GPU build is THE SAME TOOL (src/web.zig) compiled with its WebGPU rasterizer —
+// the WebGL2 twin linked in beside it, the wasm picks at runtime — so the panel, the
+// journey, the editor and the files all come along. The software wasm stays the
+// fallback for a tab with no GPU path, a server without the GPU build, or `?sw=1`
+// (pinned software, also where the GPU boot lands when no device ever answers).
+// `?force=gl` exercises the WebGL2 twin where WebGPU would have answered.
+const forceSW = params.get("sw") === "1";
+const forceGl = params.get("force") === "gl";
+const gpuCv = document.getElementById("e8gpu");
+let x, mem, ctx, GPU = false;
+
+const webgl2ok = () => { try { return !!document.createElement("canvas").getContext("webgl2"); } catch { return false; } };
+
+async function bootGpu() {
+  if (forceSW || !(navigator.gpu || webgl2ok())) return false;
   try {
-    ({ instance } = await WebAssembly.instantiateStreaming(fetch(url), { env: {} }));
-  } catch {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
-    ({ instance } = await WebAssembly.instantiate(await r.arrayBuffer(), { env: {} }));
+    // emscripten's classic output reads the global `Module` and resolves its wasm next
+    // to its own script tag; `locateFile` is the belt to that suspender.
+    await new Promise((res, rej) => {
+      const t = setTimeout(() => rej(new Error("gpu boot timed out")), 20000);
+      window.Module = {
+        onRuntimeInitialized: () => { clearTimeout(t); res(); },
+        onAbort: (why) => { clearTimeout(t); rej(new Error(String(why))); },
+        locateFile: (path, prefix) => (prefix || "gpu/") + path,
+      };
+      const s = document.createElement("script");
+      s.src = `gpu/e8-${demo}.js`;
+      s.onerror = () => { clearTimeout(t); rej(new Error("no GPU build on this server")); };
+      document.body.appendChild(s);
+    });
+  } catch { return false; }
+  // emscripten prefixes its exports; the Proxy makes the rest of this page not care
+  // which build answered. The heap is fixed (-sALLOW_MEMORY_GROWTH=0), but ask for the
+  // buffer each time anyway — a getter costs nothing and survives a policy change.
+  x = new Proxy({}, { get: (_, k) => window.Module["_" + k] });
+  mem = { get buffer() { return window.Module.HEAPU8.buffer; } };
+  if (forceGl) x.zicroForceGl();
+  return true;
+}
+
+try {
+  GPU = await bootGpu();
+  if (!GPU) {
+    // Streaming first; if the server mislabels the MIME type (a plain file server
+    // often does), fall back to the buffered path instead of failing the page.
+    const url = `wasm/e8-${demo}.wasm`;
+    let instance;
+    try {
+      ({ instance } = await WebAssembly.instantiateStreaming(fetch(url), { env: {} }));
+    } catch {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+      ({ instance } = await WebAssembly.instantiate(await r.arrayBuffer(), { env: {} }));
+    }
+    x = instance.exports; mem = x.memory;
   }
-  x = instance.exports; mem = x.memory;
+  // The glass: opaque when the software rasterizer paints the figure into this canvas,
+  // a transparent hole when the figure is on the GPU canvas underneath (the wasm picks
+  // the matching fill — see zicroBoot in web.zig).
+  ctx = canvas.getContext("2d", { alpha: GPU });
+  gpuCv.style.display = GPU ? "block" : "none";
   x.zicroBoot();
-  loadEl.style.display = "none";
+  if (!GPU) loadEl.style.display = "none";
 } catch (e) { fail(String(e)); throw e; }
+
+// The adapter chain is async: the device answers some frames after boot. Until it does
+// the HUD narrates over black; if it NEVER does, reload pinned to the software build —
+// a dead canvas must not be the answer.
+if (GPU) {
+  loadEl.textContent = "starting the GPU…";
+  let tries = 0;
+  const check = () => {
+    const d = x.zicroSceneDevice();
+    if (d > 0) {
+      loadEl.style.display = "none";
+      document.getElementById("dev").textContent = d === 2 ? "WebGPU" : "WebGL2";
+      return;
+    }
+    if (++tries > 200) {
+      params.set("sw", "1");
+      location.replace(location.pathname + "?" + params);
+      return;
+    }
+    setTimeout(check, 50);
+  };
+  check();
+}
 
 // --- the frame buffer -------------------------------------------------------------
 // The figure is rasterized on the CPU, so every physical pixel is one this thread
@@ -264,7 +341,8 @@ try {
 // because the frame is single-threaded here (native render_cpu bands across a pool),
 // and per-pixel bound: a 24-point scene costs nearly what a 240-point, 6720-edge one
 // does, so fewer scene pixels is close to a linear win.
-const DPR_MAX = TOUCH ? 1.5 : 2;
+// On the GPU the per-pixel bill is the HUD alone, so a phone can keep its pixels.
+const DPR_MAX = GPU ? 2 : (TOUCH ? 1.5 : 2);
 let dpr = 1;
 function resize() {
   dpr = Math.min(window.devicePixelRatio || 1, DPR_MAX);
@@ -877,15 +955,37 @@ function govern(frameMs) {
   x.zicroSceneScale(q);
 }
 
+// The scene's slot, straight from the wasm: the GPU canvas is a DOM element of its
+// own, laid each frame exactly over the rect the software build would blit into —
+// same layout, same gutter for the panel, whichever device draws.
+let sx = -1, sy = -1, ssw = -1, ssh = -1;
+function placeScene() {
+  const p = x.zicroSceneRect() >> 2;
+  const r = new Uint32Array(mem.buffer, p << 2, 4);
+  if (r[0] === sx && r[1] === sy && r[2] === ssw && r[3] === ssh) return;
+  [sx, sy, ssw, ssh] = r;
+  if (ssw < 2 || ssh < 2) return;
+  gpuCv.width = ssw; gpuCv.height = ssh;
+  gpuCv.style.left = (sx / dpr) + "px";
+  gpuCv.style.top = (sy / dpr) + "px";
+  gpuCv.style.width = (ssw / dpr) + "px";
+  gpuCv.style.height = (ssh / dpr) + "px";
+}
+
 function frame(tMs) {
   const t0 = performance.now();     // the work is the wasm frame; the JS blit is ~1 ms
   x.zicroFrame(tMs);
+  if (GPU) placeScene();
   const w = x.zicroWidth(), h = x.zicroHeight();
   if (w > 0 && h > 0) {
+    // putImageData is a raw copy, alpha included — on the GPU path the transparent
+    // glass lands as transparency, no clearRect needed.
     const bytes = new Uint8ClampedArray(mem.buffer, x.zicroPixels(), w * h * 4);
     ctx.putImageData(new ImageData(bytes, w, h), 0, 0);
   }
-  govern(performance.now() - t0);
+  // The governor exists because the software path pays per scene pixel on one
+  // thread; the GPU path does not, and its scale is pinned to 1 inside the wasm.
+  if (!GPU) govern(performance.now() - t0);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

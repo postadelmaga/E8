@@ -39,7 +39,12 @@ const boot = document.getElementById("boot");
 const gpuCv = document.getElementById("e8gpu");
 const canvas = document.getElementById("hud2d");
 const ctx = canvas.getContext("2d", { alpha: true }); // alpha: the glass is a HOLE
-const forceGl = new URLSearchParams(location.search).get("force") === "gl";
+const params = new URLSearchParams(location.search);
+const forceGl = params.get("force") === "gl";
+// Every demo has a GPU build now (one wasm per demo, the same comptime seam as the
+// software gallery); this page instantiates the one asked for.
+const DEMOS = ["lisi","mtheory","polytope","molecule","chem","astro","graph","data","embed"];
+const demo = DEMOS.includes(params.get("d")) ? params.get("d") : "lisi";
 
 let x = null, dpr = 1;
 // NOT cached: -sALLOW_MEMORY_GROWTH replaces the ArrayBuffer when the heap grows, and a
@@ -67,7 +72,7 @@ var Module = {
       if (++tries > 200) {
         boot.className = "bad";
         boot.innerHTML = "No GPU path in this browser — neither WebGPU nor WebGL2.<br><br>" +
-          "<a href='../demo.html?d=lisi'>Open the software build instead →</a>";
+          `<a href='../demo.html?d=${demo}&sw=1'>Open the software build instead →</a>`;
         return;
       }
       setTimeout(check, 50);
@@ -143,7 +148,13 @@ addEventListener("keyup", (e) => {
     ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Tab: 9, Backspace: 8 })[e.key];
   if (c !== undefined) x.zicroKey(c, 0);
 });
+// The module, by name — one wasm per demo, so the script tag cannot be static.
+{
+  const s = document.createElement("script");
+  s.src = `e8-${demo}.js`;
+  s.onerror = () => { boot.className = "bad"; boot.textContent = `e8-${demo}.js is missing on this server`; };
+  document.body.appendChild(s);
+}
 </script>
-<script src="e8gpu.js"></script>
 </body>
 </html>

@@ -325,7 +325,10 @@ pub fn render(insts: []const Instance, draws: []const Draw, view_proj: [16]f32, 
             @floatCast(clear[0]), @floatCast(clear[1]),
             @floatCast(clear[2]), @floatCast(clear[3]),
         };
-        gl.render(drawsAs(gm.InstancedDraw, draws, &dbuf), .{ .view_proj = view_proj }, c32);
+        // The twin's render now takes the frame it draws into (Zengine's depth-contract
+        // seam); this renderer stands alone on its canvas, so the frame is its own —
+        // framebuffer 0, cleared here, its depth nobody else's to share.
+        _ = gl.render(gl.ownFrame(), drawsAs(gm.InstancedDraw, draws, &dbuf), .{ .view_proj = view_proj }, c32);
         return;
     }
 
@@ -339,7 +342,9 @@ pub fn render(insts: []const Instance, draws: []const Draw, view_proj: [16]f32, 
     const view = c.wgpuTextureCreateView(st.texture, null).?;
     defer c.wgpuTextureViewRelease(view);
 
-    a.mp.render(view, a.vbuf, a.ibuf, drawsAs(backend.InstancedDraw, draws, &wbuf), .{
+    // Same depth-contract seam as the twin above: the frame is this renderer's own —
+    // the swap-chain view it just took, with the MeshPresent's private depth behind it.
+    _ = a.mp.render(a.mp.ownFrame(view), a.vbuf, a.ibuf, drawsAs(backend.InstancedDraw, draws, &wbuf), .{
         .view_proj = view_proj,
     }, clear);
     // No present call: on the web the compositor takes the canvas when this returns.
